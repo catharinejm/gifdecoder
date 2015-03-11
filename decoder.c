@@ -5,6 +5,7 @@
 #include <string.h>
 
 #define GIF89a "GIF89a"
+#define PXSIZE 3
 
 #define DIE(msg, code)                               \
     do {                                             \
@@ -41,7 +42,7 @@ void read_tag(uint8_t *tagbuf, int len, FILE *gif) {
 }
 
 void read_ctable(uint8_t *ctbl, int ctbl_size, FILE *gif) {
-    int ctbl_len = (1 << ctbl_size) * 3;
+    int ctbl_len = (1 << ctbl_size) * PXSIZE;
     ctbl = calloc(ctbl_len, 1);
     if (!ctbl)
         DIE("Failed to allocate color table", errno);
@@ -94,19 +95,24 @@ void parse_image_desc(struct img_desc *idesc, FILE *gif) {
 int main() {
     FILE *gif = fopen("./emulogic.gif", "r");
     int rd_err;
+    uint8_t *img;
+    int img_size;
     
     validate_header(gif);
 
     struct screen_desc sdesc;
     parse_screen_desc(&sdesc, gif);
-    
+
+    img_size = sdesc->width * sdesc->height * PXSIZE;
+    img = calloc(img_size, 1);
+
     uint8_t *gctbl = NULL;
     if (sdesc->has_gctbl) {
         read_ctable(gctbl, sdesc->gctbl_size, gif);
     }
 
     int cur = fgetc(gif);
-    while (cur != EOF) {
+    while (cur != 0x3B && cur != EOF) {
         switch((uint8_t)cur) {
         0x21:
             DIE("Graphics control extension parsing not implemented. :-/", -1);
@@ -121,17 +127,26 @@ int main() {
                 else
                     ctbl = gctbl;
 
+                if (!ctbl)
+                    DIE("No color table", -1);
+
                 
                 
                 break;
             }
         default:
             DIE("I don't know what to do.", -1);
+            break;
         }
     }
 
     if (rd_err = ferror(gif))
-        DIE("Error reading file", rd_err)
+        DIE("Error reading file", rd_err);
+    if (feof(gif))
+        DIE("Premature EOF", -1);
 
+    if (fgetc(gif) != EOF)
+        fprintf("Warning: extra data after end of GIF contents.");
+    
     return 0;
 }
