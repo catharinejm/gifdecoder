@@ -13,6 +13,12 @@
         exit(code);                                  \
     } while(0)
 
+#define DIEF(code, msg, ...)                    \
+    do {                                        \
+        fprintf(stderr, msg, ##__VA_ARGS__);    \
+        exit(code);                             \
+    } while(0)
+
 void validate_header(FILE *gif) {
     char hdr[7];
     if (!fgets(hdr, 7, gif) || strcmp(hdr, GIF89a))
@@ -36,7 +42,7 @@ void read_tag(uint8_t *tagbuf, int len, FILE *gif) {
         int e;
         if (feof(gif))
             DIE("Premature EOF", -1);
-        if (e = ferror(gif))
+        if ((e = ferror(gif)))
             DIE("Error reading file", e);
     }
 }
@@ -52,7 +58,7 @@ void read_ctable(uint8_t *ctbl, int ctbl_size, FILE *gif) {
         int rd_err;
         if (feof(gif))
             DIE("Premature EOF", -1);
-        if (rd_err = ferror(gif))
+        if ((rd_err = ferror(gif)))
             DIE("Error reading file", rd_err);
     }
 }
@@ -80,10 +86,10 @@ void parse_image_desc(struct img_desc *idesc, FILE *gif) {
     read_tag(bys, 9, gif);
 
     uint16_t *dims = (uint16_t*)bys;
-    idesc->left = dims++;
-    idesc->top = dims++;
-    idesc->width = dims++;
-    idesc->height = dims;
+    idesc->left = *dims++;
+    idesc->top = *dims++;
+    idesc->width = *dims++;
+    idesc->height = *dims;
 
     uint8_t pack = bys[8];
     idesc->has_lctbl = pack >> 7;
@@ -103,27 +109,27 @@ int main() {
     struct screen_desc sdesc;
     parse_screen_desc(&sdesc, gif);
 
-    img_size = sdesc->width * sdesc->height * PXSIZE;
+    img_size = sdesc.width * sdesc.height * PXSIZE;
     img = calloc(img_size, 1);
 
     uint8_t *gctbl = NULL;
-    if (sdesc->has_gctbl) {
-        read_ctable(gctbl, sdesc->gctbl_size, gif);
+    if (sdesc.has_gctbl) {
+        read_ctable(gctbl, sdesc.gctbl_size, gif);
     }
 
     int cur = fgetc(gif);
     while (cur != 0x3B && cur != EOF) {
         switch((uint8_t)cur) {
-        0x21:
+        case 0x21:
             DIE("Graphics control extension parsing not implemented. :-/", -1);
             break;
-        0x2C:
+        case 0x2C:
             {
                 uint8_t *ctbl;
                 struct img_desc idesc;
                 parse_image_desc(&idesc, gif);
-                if (idesc->has_lctbl)
-                    read_ctable(ctbl, idesc->lctbl_size, gif);
+                if (idesc.has_lctbl)
+                    read_ctable(ctbl, idesc.lctbl_size, gif);
                 else
                     ctbl = gctbl;
 
@@ -135,18 +141,18 @@ int main() {
                 break;
             }
         default:
-            DIE("I don't know what to do.", -1);
+            DIEF(-1, "Received 0x%2x - I don't know what to do", cur);
             break;
         }
     }
 
-    if (rd_err = ferror(gif))
+    if ((rd_err = ferror(gif)))
         DIE("Error reading file", rd_err);
     if (feof(gif))
         DIE("Premature EOF", -1);
 
     if (fgetc(gif) != EOF)
-        fprintf("Warning: extra data after end of GIF contents.");
+        fprintf(stderr, "Warning: extra data after end of GIF contents.");
     
     return 0;
 }
