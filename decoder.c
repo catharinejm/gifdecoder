@@ -122,19 +122,45 @@ void read_block(uint8_t *buf, int len, FILE *gif) {
     if (rlen < len) DIE_EOF(gif);
 }
 
+struct ctable_ext {
+    int cnt;
+    int offsets[4096];
+    struct buffer ctbl;
+};
+
+struct ctable_ext *alloc_ctable_ext(int buflen) {
+    struct ctable_ext *cte = calloc(sizeof(struct ctable_ext) + buflen, 1);
+    if (!cte)
+        DIE("Failed to allocate ctable extension", errno);
+    return cte;
+}
+
+void expand_ctable_ext(struct ctable_ext *ctbl_ext) {
+    struct ctable_ext *cte = realloc(ctbl_ext, sizeof(struct ctable_ext) + ctbl_ext->ctbl.len * 2);
+    if (!cte)
+        DIE("Failed to expand ctable extension");
+    return cte;
+}
+
+#define CTE_GET(cte, idx)                      \
+    ((struct buffer*)(&cte->ctbl.buf + cte->offsets[idx]))
+
+
 void decode_image(struct screen_desc *sdesc, struct img_desc *idesc,
                   struct buffer *ctbl, struct buffer* img, FILE *gif)
 {
     int code_size;
     int blk_len;
     uint8_t codes[256];
-    uint8_t ctbl_extension[4096];
-    int clear_code, eoi_code;
+    struct buffer *ctbl_ext = calloc(sizeof(struct ctable_ext) + 4096, 1);
+    ctbl_ext->ctbl.len = 4096;
+    int clear_code, eoi_code, inc_cs_flag;
 
-    const int row_len = sdesc->width * PXSIZE;
-    const int img_top = row_len * idesc->top;
+    const int sc_row_len = sdesc->width * PXSIZE;
+    const int img_row_len = idesc->width * PXSIZE;
+    const int img_top = sc_row_len * idesc->top;
     const int img_left = idesc->left * PXSIZE;
-    const int img_right = img_right + idesc->width * PXSIZE;
+    const int img_right = img_left + img_row_len;
 
     int img_idx = img_top + img_left;
 
@@ -142,9 +168,55 @@ void decode_image(struct screen_desc *sdesc, struct img_desc *idesc,
     clear_code = 1 << (code_size - 1);
     eoi_code = clear_code + 1;
     ctbl_ext_idx = -1;
+    inc_cs_flag = (1 << code_size) - 1;
+
     while ((blk_len = read_byte(gif))) {
         read_block(codes, blk_len, gif);
-        
+        int byte_idx = 0;
+        int bit_idx = 7;
+        while (1) {
+            int bits_read = 0;
+            int mask, code;
+            if (bit_idx < code_size) {
+                code = codes[byte_idx++] << 8;
+                bits_read += bit_idx + 8;
+                bit_idx = 7;
+                
+                if (bits_read < code_size) {
+                    if (byte_idx >= blk_len)
+                        DIE("Premature end of sub-block", -1);
+                    code <<= 8;
+                    code |= codes[byte_idx++];
+                    bits_read += 8;
+                }
+                if (bits_read > code_size)
+                    code >>= bits_read - code_size;
+
+                /* TODO: All these image_right checks are wrong :-/
+                 *       Need to adjust for the row too
+                 */
+                int coff = code * PXSIZE;
+                if (coff < ctbl->len) {
+                    memcpy(&img->buf+img_idx, &ctbl->buf+coff, PXSIZE);
+                    img_idx += PXSIZE;
+                    if (img_idx >= img_right)
+                        img_idx += sc_row_len - img_row_len;
+                    if (img_idx >= img->len)
+                        DIE("Past end of image data", -1);
+                } else {
+                    struct buffer *cte_entry = CTE_GET(ctbl_ext, coff);
+                    if (img_idx + cte_entry->len > img_right) {
+                        // copy portion that fits into img
+                        // wrap img_idx
+                        // copy remaining portion
+                    } else {
+                        // copy whole thing
+                        // bump img_idx, wrap if necessary
+                    }
+                }
+                //TODO: Extend ctbl_ext with new code
+            }
+        }
     }
 }
 
