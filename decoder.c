@@ -54,7 +54,7 @@ struct cursor {
  */
 static inline int cur_inrange(struct cursor *c, int n) {
     uint8_t *addr = c->cur + n;
-    return addr < c->end && addr >= c->start;
+    return addr <= c->end && addr >= c->start;
 }
 
 /* pass n<0 to move backwards */
@@ -121,6 +121,7 @@ static inline uint8_t get_byte(struct cursor *c) {
     if (c->cur < c->end)
         return *c->cur++;
     DIE_EOF("Getting byte");
+    return -1;
 }
 
 void parse_screen_desc(struct screen_desc *sdesc, struct cursor *gif) {
@@ -134,7 +135,7 @@ void parse_screen_desc(struct screen_desc *sdesc, struct cursor *gif) {
     sdesc->has_gctbl = pack >> 7;
     sdesc->color_res = (pack & 0x70) >> 4;
     sdesc->sorted = (pack & 0x08) >> 3;
-    sdesc->gctbl_size = pack & 0x03;
+    sdesc->gctbl_size = pack & 0x07;
 
     sdesc->bgcolor_idx = *gif->cur++;
     sdesc->px_aspect = *gif->cur++;
