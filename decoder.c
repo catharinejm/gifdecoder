@@ -3,40 +3,76 @@
 #include <stdlib.h>
 #include <errno.h>
 #include <string.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+
+#ifdef _TEST_
+#include "test.h"
+#endif
+
+#ifndef EXIT
+#define EXIT exit
+#endif
 
 #define GIF89a "GIF89a"
 #define PXSIZE 3
 
-#define DIE(msg, code)                          \
+#define DIE(msg)                                \
     do {                                        \
+        if (errno) {                            \
+            perror(msg);                        \
+            EXIT(errno);                        \
+        }                                       \
         fprintf(stderr, msg "\n");              \
-        exit(code);                             \
+        EXIT(-1);                               \
     } while(0)
 
-#define DIEF(code, msg, ...)                    \
-    do {                                        \
-        fprintf(stderr, msg, ##__VA_ARGS__);    \
-        exit(code);                             \
+#define DIEF(code, msg, ...)                      \
+    do {                                          \
+        fprintf(stderr, msg "\n", ##__VA_ARGS__); \
+        EXIT(code);                               \
     } while(0)
 
-#define CTBL_LEN(size)                          \
-    ((1 << size) * PXSIZE)
+#define CTBL_LEN(size) ((1 << size) * PXSIZE)
 
-#define DIE_EOF(file)                           \
-    do {                                        \
-        int e;                                  \
-        if (feof(file))                         \
-            DIE("Premature EOF", -1);           \
-        if ((e = ferror(file)))                 \
-            DIE("Error reading file", e);       \
-        DIE("An unknown error occurred", -2);   \
-    } while(0)
+#define DIE_EOF(msg) DIE("Premature EOF: " msg)
+
+struct cursor {
+    union {
+        uint8_t  *cur;
+        uint16_t *cur16;
+        uint32_t *cur32;
+        uint64_t *cur64;
+    };
+    uint8_t *start;
+    uint8_t *end;
+};
+
+/* n is a byte offset from c->cur
+ * pass n<0 to check backwards
+ */
+static inline int cur_inrange(struct cursor *c, int n) {
+    uint8_t *addr = c->cur + n;
+    return addr < c->end && addr >= c->start;
+}
+
+/* pass n<0 to move backwards */
+static inline int cur_move(struct cursor *c, int n) {
+    if (cur_inrange(c, n)) {
+        c->cur+=n;
+        return n;
+    }
+    return 0;
+}
 
 
-void validate_header(FILE *gif) {
-    char hdr[7];
-    if (!fgets(hdr, 7, gif) || strcmp(hdr, GIF89a))
-        DIE("Invalid header", -1);
+void validate_header(struct cursor *gif) {
+    if (!cur_inrange(gif, 6))
+        DIE_EOF("Invalid header");
+    if (memcmp(gif->cur, GIF89a, 6))
+        DIE("Invalid header");
+    gif->cur += 6;
 }
 
 struct screen_desc {
@@ -58,68 +94,66 @@ struct buffer {
 struct buffer *alloc_buffer(int len) {
     struct buffer *buf = calloc(sizeof(struct buffer) + len, 1);
     if (!buf)
-        DIE("Failed to allocate buffer", errno);
+        DIE("Failed to allocate buffer");
     buf->len = len;
     return buf;
 }
 
-void read_tag(uint8_t *tagbuf, int len, FILE *gif) {
-    int rcnt = fread(tagbuf, 1, len, gif);
-    if (rcnt < len) DIE_EOF(gif);
-}
-
-void read_ctable(struct buffer *ctbl, int ctable_size, FILE *gif) {
+void read_ctable(struct buffer **ctbl, int ctbl_size, struct cursor *gif) {
     int ctbl_len = CTBL_LEN(ctbl_size);
-    ctbl = alloc_buffer(ctbl_len);
+    *ctbl = alloc_buffer(ctbl_len);
 
-    int rcnt = fread(ctbl->tbl, 1, ctbl_len, gif);
-    if (rcnt < ctbl_len) DIE_EOF(gif);
+    if (cur_inrange(gif, ctbl_len)) {
+        memcpy((*ctbl)->buf, gif->cur, ctbl_len);
+        gif->cur += ctbl_len;
+    } else
+        DIE_EOF("Failed to read ctable");
 }
 
-void parse_screen_desc(struct screen_desc *sdesc, FILE *gif) {
-    uint8_t bys[7];
+void copy_block(uint8_t *buf, int len, struct cursor *gif) {
+    if (gif->cur + len < gif->end)
+        memcpy(buf, gif->cur, len);
+    else
+        DIE_EOF("Failed to copy block");
+}
 
-    read_tag(bys, 7, gif);
-    
-    sdesc->width = *(uint16_t*)bys;
-    sdesc->height = *(uint16_t*)bys+2;
+static inline uint8_t get_byte(struct cursor *c) {
+    if (c->cur < c->end)
+        return *c->cur++;
+    DIE_EOF("Getting byte");
+}
 
-    uint8_t pack = bys[4];
+void parse_screen_desc(struct screen_desc *sdesc, struct cursor *gif) {
+    if (!cur_inrange(gif, 7))
+        DIE_EOF("Invalid screen description");
+
+    sdesc->width = *gif->cur16++;
+    sdesc->height = *gif->cur16++;
+
+    uint8_t pack = *gif->cur++;
     sdesc->has_gctbl = pack >> 7;
     sdesc->color_res = (pack & 0x70) >> 4;
     sdesc->sorted = (pack & 0x08) >> 3;
     sdesc->gctbl_size = pack & 0x03;
 
-    sdesc->bgcolor_idx = bys[5];
-    sdesc->px_aspect = bys[6];
+    sdesc->bgcolor_idx = *gif->cur++;
+    sdesc->px_aspect = *gif->cur++;
 }
 
-void parse_image_desc(struct img_desc *idesc, FILE *gif) {
-    uint8_t bys[9];
-    read_tag(bys, 9, gif);
+void parse_image_desc(struct img_desc *idesc, struct cursor *gif) {
+    if (!cur_inrange(gif, 9))
+        DIE_EOF("Invalid image description");
 
-    uint16_t *dims = (uint16_t*)bys;
-    idesc->left = *dims++;
-    idesc->top = *dims++;
-    idesc->width = *dims++;
-    idesc->height = *dims;
+    idesc->left = *gif->cur16++;
+    idesc->top = *gif->cur16++;
+    idesc->width = *gif->cur16++;
+    idesc->height = *gif->cur16++;
 
-    uint8_t pack = bys[8];
+    uint8_t pack = *gif->cur++;
     idesc->has_lctbl = pack >> 7;
     idesc->interlaced = (pack & 0x40) >> 6;
     idesc->sorted = (pack & 0x20) >> 5;
     idesc->lctbl_size = pack & 0x3;
-}
-
-int read_byte(FILE *gif) {
-    int b = fgetc(gif);
-    if (b == EOF) DIE_EOF(gif);
-    return b;
-}
-
-void read_block(uint8_t *buf, int len, FILE *gif) {
-    int rlen = fread(buf, 1, len, gif);
-    if (rlen < len) DIE_EOF(gif);
 }
 
 struct ctable_ext {
@@ -131,28 +165,28 @@ struct ctable_ext {
 struct ctable_ext *alloc_ctable_ext(int buflen) {
     struct ctable_ext *cte = calloc(sizeof(struct ctable_ext) + buflen, 1);
     if (!cte)
-        DIE("Failed to allocate ctable extension", errno);
+        DIE("Failed to allocate ctable extension");
     return cte;
 }
 
-void expand_ctable_ext(struct ctable_ext *ctbl_ext) {
+struct ctable_ext *expand_ctable_ext(struct ctable_ext *ctbl_ext) {
     struct ctable_ext *cte = realloc(ctbl_ext, sizeof(struct ctable_ext) + ctbl_ext->ctbl.len * 2);
     if (!cte)
         DIE("Failed to expand ctable extension");
     return cte;
 }
 
-#define CTE_GET(cte, idx)                      \
+#define CTE_GET(cte, idx)                                   \
     ((struct buffer*)(&cte->ctbl.buf + cte->offsets[idx]))
 
 
 void decode_image(struct screen_desc *sdesc, struct img_desc *idesc,
-                  struct buffer *ctbl, struct buffer* img, FILE *gif)
+                  struct buffer *ctbl, struct buffer* img, struct cursor *gif)
 {
     int code_size;
     int blk_len;
     uint8_t codes[256];
-    struct buffer *ctbl_ext = calloc(sizeof(struct ctable_ext) + 4096, 1);
+    struct ctable_ext *ctbl_ext = calloc(sizeof(struct ctable_ext) + 4096, 1);
     ctbl_ext->ctbl.len = 4096;
     int clear_code, eoi_code, inc_cs_flag;
 
@@ -164,14 +198,13 @@ void decode_image(struct screen_desc *sdesc, struct img_desc *idesc,
 
     int img_idx = img_top + img_left;
 
-    code_size = read_byte(gif) + 1;
+    code_size = get_byte(gif) + 1;
     clear_code = 1 << (code_size - 1);
     eoi_code = clear_code + 1;
-    ctbl_ext_idx = -1;
     inc_cs_flag = (1 << code_size) - 1;
 
-    while ((blk_len = read_byte(gif))) {
-        read_block(codes, blk_len, gif);
+    while ((blk_len = get_byte(gif))) {
+        copy_block(codes, blk_len, gif);
         int byte_idx = 0;
         int bit_idx = 7;
         while (1) {
@@ -184,7 +217,7 @@ void decode_image(struct screen_desc *sdesc, struct img_desc *idesc,
                 
                 if (bits_read < code_size) {
                     if (byte_idx >= blk_len)
-                        DIE("Premature end of sub-block", -1);
+                        DIE("Premature end of sub-block");
                     code <<= 8;
                     code |= codes[byte_idx++];
                     bits_read += 8;
@@ -202,7 +235,7 @@ void decode_image(struct screen_desc *sdesc, struct img_desc *idesc,
                     if (img_idx >= img_right)
                         img_idx += sc_row_len - img_row_len;
                     if (img_idx >= img->len)
-                        DIE("Past end of image data", -1);
+                        DIE("Past end of image data");
                 } else {
                     struct buffer *cte_entry = CTE_GET(ctbl_ext, coff);
                     if (img_idx + cte_entry->len > img_right) {
@@ -220,8 +253,22 @@ void decode_image(struct screen_desc *sdesc, struct img_desc *idesc,
     }
 }
 
-int main() {
-    FILE *gif = fopen("./emulogic.gif", "r");
+void load_file(const char *fname, struct cursor *c) {
+    int fd = open(fname, O_RDONLY);
+    if (-1 == fd)
+        DIE("Error opening file");
+    struct stat st;
+    if (fstat(fd, &st) == -1)
+        DIE("Failed to stat file");
+    /* TODO: Don't map huge files! */
+    c->start = mmap(NULL, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    if (MAP_FAILED == c->start)
+        DIE("Failed to mmap file");
+    c->end = ((uint8_t*) c->start) + st.st_size;
+    c->cur = (uint8_t*) c->start;
+}
+
+void parse_gif(struct cursor *gif) {
     struct buffer *img;
     
     validate_header(gif);
@@ -233,14 +280,13 @@ int main() {
 
     struct buffer *gctbl = NULL;
     if (sdesc.has_gctbl) {
-        read_ctable(gctbl, sdesc.gctbl_size, gif);
+        read_ctable(&gctbl, sdesc.gctbl_size, gif);
     }
 
-    int cur;
-    while ((cur = fgetc(gif)) != 0x3B && cur != EOF) {
-        switch((uint8_t)cur) {
+    while (gif->cur < gif->end && *gif->cur != 0x3B) {
+        switch(*gif->cur) {
         case 0x21:
-            DIE("Graphics control extension parsing not implemented. :-/", -1);
+            DIE("Graphics control extension parsing not implemented. :-/");
             break;
         case 0x2C:
             {
@@ -248,33 +294,36 @@ int main() {
                 struct img_desc idesc;
                 parse_image_desc(&idesc, gif);
                 if (idesc.has_lctbl)
-                    read_ctable(ctbl, idesc.lctbl_size, gif);
+                    read_ctable(&ctbl, idesc.lctbl_size, gif);
                 else
                     ctbl = gctbl;
 
                 if (!ctbl)
-                    DIE("No color table", -1);
+                    DIE("No color table");
 
-                decode_image(sdesc, idesc, ctbl, img, gif);
+                decode_image(&sdesc, &idesc, ctbl, img, gif);
 
                 if (ctbl != gctbl)
                     free(ctbl);
                 break;
             }
         default:
-            DIEF(-1, "Received 0x%2x - I don't know what to do", cur);
+            DIEF(-1, "Received 0x%2x - I don't know what to do", *gif->cur);
             break;
         }
     }
 
-    int rd_err;
-    if ((rd_err = ferror(gif)))
-        DIE("Error reading file", rd_err);
-    if (feof(gif))
-        DIE("Premature EOF", -1);
-
-    if (fgetc(gif) != EOF)
+    if (gif->cur < gif->end)
         fprintf(stderr, "Warning: extra data after end of GIF contents.");
+}
+
+#ifndef _TEST_
+int main() {
+    struct cursor gif;
+    load_file("./emulogic.gif", &gif);
+
+    parse_gif(&gif);
     
     return 0;
 }
+#endif
