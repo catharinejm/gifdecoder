@@ -4,6 +4,9 @@
 #define MAX_FAILS 256
 static const char *test_fail_names[MAX_FAILS];
 static int test_fail_count = 0;
+static int test_pass_count = 0;
+
+#define DEFTEST(name) void name()
 
 static int test_did_exit = 0;
 static int test_exit_code;
@@ -21,5 +24,16 @@ void assert_equal(int expected, int actual, const char *msg);
 
 void test_exit(int status);
 void reset_tests();
+
+#ifndef RUN_TESTS
+# define RUN_TESTS()                                              \
+    do {                                                          \
+        printf("No tests to run! Did you run runbuilder.js?\n");  \
+        exit(-1);                                                 \
+    } while (0)
+#endif
+#ifndef TEST_EXTERNS
+# define TEST_EXTERNS
+#endif
 
 #endif

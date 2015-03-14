@@ -1,17 +1,20 @@
-TARGETS = decoder_test main
+TARGETS = main
+TEST_FILES = $(wildcard	*_test.c)
 
 CC = gcc -ggdb
 
-clean:
-	rm -f *.o **/*.o $(TARGETS)
-	rm -rf *.dSYM/ **/*.dSYM/
+.PHONY: all test clean
 
-decoder_test: CC += -D_TEST_
-decoder_test: decoder_test.o decoder.o pcg/pcg_basic.o test/test.o
+clean:
+	rm -f *.o $(TARGETS)
+	rm -rf *.dSYM/
+	$(MAKE) -C test clean
+
+decoder_test: test/decoder_test.o decoder.o pcg/pcg_basic.o test/test.o
 
 pcg/pgc_basic.o: pcg/pcg_basic.c pcg/pcg_basic.h
 
-test: clean decoder_test
-	./decoder_test 2> /dev/null
-
 main: decoder.o
+
+test:
+	$(MAKE) -C test

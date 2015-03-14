@@ -4,9 +4,9 @@
 #include <unistd.h>
 #include <time.h>
 
-#include "pcg/pcg_basic.h"
-#include "test/test.h"
-#include "decoder.h"
+#include "../pcg/pcg_basic.h"
+#include "test.h"
+#include "../decoder.h"
 
 static void init_cursor(struct cursor *c, void *contents, int len) {
     c->start = contents;
@@ -14,7 +14,7 @@ static void init_cursor(struct cursor *c, void *contents, int len) {
     c->cur = c->start;
 }
 
-static void test_validate_header() {
+DEFTEST(test_validate_header) {
     struct cursor gif;
     
     init_cursor(&gif, "GIF89a", 6);
@@ -47,7 +47,7 @@ static void pack_sdesc(uint8_t *buf, struct screen_desc *sdesc) {
     *c.cur = sdesc->px_aspect;
 }
 
-static void test_parse_screen_desc() {
+DEFTEST(test_parse_screen_desc) {
     pcg32_random_t rnd;
     pcg32_srandom_r(&rnd, time(NULL) ^ (intptr_t)&sprintf, (intptr_t)&memset);
 
@@ -84,13 +84,6 @@ static void test_parse_screen_desc() {
         char *err = malloc(256);
         snprintf(err, 256, "parse_screen_desc - exits: %i, fails: %i", exits, fails);
         record_failure(err);
-    }
-}
-
-int main() {
-    test_validate_header();
-    test_parse_screen_desc();
-    print_results();
-
-    return test_fail_count;
+    } else
+        test_pass_count++;
 }
