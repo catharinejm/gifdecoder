@@ -7,7 +7,7 @@ if (process.argv.length < 3) {
 }
 
 var lines = [];
-var regexp = /^\s*DEFTEST\s*\(\s*(\w+)\s*\).*$/;
+var regexp = /^\s*DEFTEST\s*\(\s*(\w+)\s*(?:,[\s\w]*)*\).*$/;
 
 for (var i = 2; i < process.argv.length; i++) {
   var file = process.argv[i];
@@ -27,4 +27,5 @@ for (var i in lines) {
   externs.push("void "+lines[i]);
 }
 console.log("-DRUN_TESTS\\(\\)='do { "+lines.join("")+" } while (0)' "+
-            "-DTEST_EXTERNS='"+externs.join("")+"'");
+            "-DTEST_EXTERNS='"+externs.join("")+"' "+
+            "-DTEST_COUNT="+lines.length);

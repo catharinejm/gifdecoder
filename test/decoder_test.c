@@ -14,20 +14,28 @@ static void init_cursor(struct cursor *c, void *contents, int len) {
     c->cur = c->start;
 }
 
-DEFTEST(test_validate_header) {
+DEFTEST(test_validate_header_valid) {
     struct cursor gif;
     
     init_cursor(&gif, "GIF89a", 6);
     validate_header(&gif);
-    assert_no_exit("validate_header - expect valid");
+    return PASS_UNLESS(test_did_exit);
+}
 
+DEFTEST(test_validate_header_eof) {
+    struct cursor gif;
+    
     init_cursor(&gif, "GIF", 3);
     validate_header(&gif);
-    assert_did_exit("validate_header - expect EOF");
+    return PASS_IF(test_did_exit);
+}
 
+DEFTEST(test_validate_header_invalid) {
+    struct cursor gif;
+    
     init_cursor(&gif, "crap56", 6);
     validate_header(&gif);
-    assert_did_exit("validate_header - expect invalid");
+    return PASS_IF(test_did_exit);
 }
 
 static void pack_sdesc(uint8_t *buf, struct screen_desc *sdesc) {
@@ -56,7 +64,7 @@ DEFTEST(test_parse_screen_desc) {
     uint8_t buf[7];
     int fails = 0;
     int exits = 0;
-    for (int i = 0; i < 100; i++) {
+    for (int i = 0; i < 1000; i++) {
         memset(&expected, 0, sizeof(struct screen_desc));
         memset(&actual, 0, sizeof(struct screen_desc));
         
@@ -83,7 +91,8 @@ DEFTEST(test_parse_screen_desc) {
     if (fails || exits) {
         char *err = malloc(256);
         snprintf(err, 256, "parse_screen_desc - exits: %i, fails: %i", exits, fails);
-        record_failure(err);
-    } else
-        test_pass_count++;
+        SET_MESSAGE(err);
+        return FAIL;
+     }
+    return PASS;
 }

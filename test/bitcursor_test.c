@@ -1,5 +1,5 @@
 #include "test.h"
 
-static void test_bitcursor_upto8() {
-    
+DEFTEST(test_bitcursor_upto8) {
+    return PASS;
 }
