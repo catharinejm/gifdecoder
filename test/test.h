@@ -11,8 +11,8 @@ enum test_state { NOT_RUN, PASS, FAIL };
 
 struct test_info {
     const char *name;
-    const char *desc;
-    const char *msg;
+    char *desc;
+    char *msg;
     enum test_state result;
     enum test_state(*testfn)();
 };
@@ -27,7 +27,7 @@ void test_harness(enum test_state(*testfn)(), const char *name, const char *desc
 #define DEFTEST(name, desc...)                                \
     enum test_state name##__IMPL();                           \
     void name() {                                             \
-        test_harness(&name##__IMPL, #name, ""##desc);         \
+        test_harness(&name##__IMPL, #name, #desc);            \
     }                                                         \
     enum test_state name##__IMPL(const char **_test_message_)
 

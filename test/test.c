@@ -12,8 +12,19 @@ void test_harness(enum test_state(*testfn)(), const char *name, const char* desc
     struct test_info *tinfo = &tests[test_index++];
     tinfo->name = name;
     tinfo->desc = NULL;
-    if (desc && *desc)
-        tinfo->desc = desc;
+    if (desc && *desc) {
+        /* Macro stringification quotes the quotes, so we'll drop 'em */
+        int start = 0;
+        int len = strlen(desc);
+        if ('"' == *desc) {
+            start++;
+            len--;
+            if ('"' == desc[len])
+                len--;
+        }
+        tinfo->desc = calloc(len+1, 1);
+        strncpy(tinfo->desc, desc+start, len);
+    }
     tinfo->testfn = testfn;
     tinfo->result = testfn(&tinfo->msg);
 

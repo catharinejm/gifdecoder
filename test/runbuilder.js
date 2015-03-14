@@ -7,7 +7,7 @@ if (process.argv.length < 3) {
 }
 
 var lines = [];
-var regexp = /^\s*DEFTEST\s*\(\s*(\w+)\s*(?:,[\s\w]*)*\).*$/;
+var regexp = /^\s*DEFTEST\s*\(\s*(\w+)\s*(?:,[^,\)]*)*\).*$/;
 
 for (var i = 2; i < process.argv.length; i++) {
   var file = process.argv[i];

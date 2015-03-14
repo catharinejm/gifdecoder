@@ -55,7 +55,7 @@ static void pack_sdesc(uint8_t *buf, struct screen_desc *sdesc) {
     *c.cur = sdesc->px_aspect;
 }
 
-DEFTEST(test_parse_screen_desc) {
+DEFTEST(test_parse_screen_desc, "Parsing the logical screen descriptor") {
     pcg32_random_t rnd;
     pcg32_srandom_r(&rnd, time(NULL) ^ (intptr_t)&sprintf, (intptr_t)&memset);
 
@@ -90,7 +90,7 @@ DEFTEST(test_parse_screen_desc) {
     
     if (fails || exits) {
         char *err = malloc(256);
-        snprintf(err, 256, "parse_screen_desc - exits: %i, fails: %i", exits, fails);
+        snprintf(err, 256, "some passes failed: exits: %i, fails: %i", exits, fails);
         SET_MESSAGE(err);
         return FAIL;
      }
