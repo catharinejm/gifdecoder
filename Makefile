@@ -1,15 +1,17 @@
-TARGETS = decoder decoder_test
+TARGETS = decoder_test main
 
 CC = gcc -ggdb
 
 clean:
-	rm -f **/*.o $(TARGETS)
+	rm -f *.o **/*.o $(TARGETS)
+	rm -rf *.dSYM/ **/*.dSYM/
 
-decoder_test: decoder_test.o pcg/pcg_basic.o
+decoder_test: CC += -D_TEST_
+decoder_test: decoder_test.o decoder.o pcg/pcg_basic.o test/test.o
 
-decoder_test.o: decoder_test.c
 pcg/pgc_basic.o: pcg/pcg_basic.c pcg/pcg_basic.h
 
 test: clean decoder_test
 	./decoder_test 2> /dev/null
 
+main: decoder.o

@@ -5,48 +5,8 @@
 #include <time.h>
 
 #include "pcg/pcg_basic.h"
-
-#define _TEST_
-
-#include "decoder.c"
-
-static int test_fd;
-static FILE *test_file;
-
-static int test_fail_count = 0;
-#define MAX_FAILS 256
-static const char *test_fail_names[MAX_FAILS];
-
-static void print_results();
-static void record_failure();
-
-static void assert_no_exit(const char *tname) {
-    if (test_did_exit)
-        record_failure(tname);
-    reset_tests();
-}
-
-static void assert_did_exit(const char *tname) {
-    if (!test_did_exit)
-        record_failure(tname);
-    reset_tests();
-}
-
-static void record_failure(const char *tname) {
-    if (test_fail_count >= MAX_FAILS){
-        fprintf(stderr, "Max fail count reached!\n");
-        print_results();
-        exit(test_fail_count);
-    }
-    test_fail_names[test_fail_count++] = tname;
-}
-
-static void assert_equal(int expected, int actual, const char *msg) {
-    if (expected != actual) {
-        record_failure(msg);
-    }
-    reset_tests();
-}
+#include "test/test.h"
+#include "decoder.h"
 
 static void init_cursor(struct cursor *c, void *contents, int len) {
     c->start = contents;
@@ -70,7 +30,7 @@ static void test_validate_header() {
     assert_did_exit("validate_header - expect invalid");
 }
 
-void pack_sdesc(uint8_t *buf, struct screen_desc *sdesc) {
+static void pack_sdesc(uint8_t *buf, struct screen_desc *sdesc) {
     struct cursor c;
     init_cursor(&c, buf, 7);
     (*c.cur16++) = sdesc->width;
@@ -125,12 +85,6 @@ static void test_parse_screen_desc() {
         snprintf(err, 256, "parse_screen_desc - exits: %i, fails: %i", exits, fails);
         record_failure(err);
     }
-}
-
-static void print_results() {
-    printf("%i failures\n", test_fail_count);
-    for (int i = 0; i < test_fail_count; i++)
-        printf("%s - FAILED\n", test_fail_names[i]);
 }
 
 int main() {

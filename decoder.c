@@ -1,53 +1,4 @@
-#include <stdio.h>
-#include <stdint.h>
-#include <stdlib.h>
-#include <errno.h>
-#include <string.h>
-#include <sys/mman.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-
-#ifdef _TEST_
-#include "test.h"
-#endif
-
-#ifndef EXIT
-#define EXIT exit
-#endif
-
-#define GIF89a "GIF89a"
-#define PXSIZE 3
-
-#define DIE(msg)                                \
-    do {                                        \
-        if (errno) {                            \
-            perror(msg);                        \
-            EXIT(errno);                        \
-        }                                       \
-        fprintf(stderr, msg "\n");              \
-        EXIT(-1);                               \
-    } while(0)
-
-#define DIEF(code, msg, ...)                      \
-    do {                                          \
-        fprintf(stderr, msg "\n", ##__VA_ARGS__); \
-        EXIT(code);                               \
-    } while(0)
-
-#define CTBL_LEN(size) ((1 << size) * PXSIZE)
-
-#define DIE_EOF(msg) DIE("Premature EOF: " msg)
-
-struct cursor {
-    union {
-        uint8_t  *cur;
-        uint16_t *cur16;
-        uint32_t *cur32;
-        uint64_t *cur64;
-    };
-    uint8_t *start;
-    uint8_t *end;
-};
+#include "decoder.h"
 
 /* n is a byte offset from c->cur
  * pass n<0 to check backwards
@@ -74,22 +25,6 @@ void validate_header(struct cursor *gif) {
         DIE("Invalid header");
     gif->cur += 6;
 }
-
-struct screen_desc {
-    uint16_t width, height;
-    uint8_t has_gctbl, color_res, sorted, gctbl_size,
-        bgcolor_idx, px_aspect;
-};
-
-struct img_desc {
-    uint16_t left, top, width, height;
-    uint8_t has_lctbl, interlaced, sorted, lctbl_size;
-};
-
-struct buffer {
-    int len;
-    uint8_t buf[0];
-};
 
 struct buffer *alloc_buffer(int len) {
     struct buffer *buf = calloc(sizeof(struct buffer) + len, 1);
@@ -157,12 +92,6 @@ void parse_image_desc(struct img_desc *idesc, struct cursor *gif) {
     idesc->lctbl_size = pack & 0x3;
 }
 
-struct ctable_ext {
-    int cnt;
-    int offsets[4096];
-    struct buffer ctbl;
-};
-
 struct ctable_ext *alloc_ctable_ext(int buflen) {
     struct ctable_ext *cte = calloc(sizeof(struct ctable_ext) + buflen, 1);
     if (!cte)
@@ -176,9 +105,6 @@ struct ctable_ext *expand_ctable_ext(struct ctable_ext *ctbl_ext) {
         DIE("Failed to expand ctable extension");
     return cte;
 }
-
-#define CTE_GET(cte, idx)                                   \
-    ((struct buffer*)(&cte->ctbl.buf + cte->offsets[idx]))
 
 
 void decode_image(struct screen_desc *sdesc, struct img_desc *idesc,
@@ -317,14 +243,3 @@ void parse_gif(struct cursor *gif) {
     if (gif->cur < gif->end)
         fprintf(stderr, "Warning: extra data after end of GIF contents.");
 }
-
-#ifndef _TEST_
-int main() {
-    struct cursor gif;
-    load_file("./emulogic.gif", &gif);
-
-    parse_gif(&gif);
-    
-    return 0;
-}
-#endif
