@@ -7,7 +7,7 @@
 # error TEST_COUNT undefined!
 #endif
 
-enum test_state { NOT_RUN, PASS, FAIL };
+enum test_state { NOT_RUN, PASS, FAIL, ERROR };
 
 struct test_info {
     const char *name;
@@ -42,6 +42,8 @@ void test_harness(enum test_state(*testfn)(), const char *name, const char *desc
 void print_result(struct test_info *tinfo);
 void print_failures();
 void print_passes();
+void print_errors();
+void print_not_runs();
 void print_results();
 void print_totals();
 

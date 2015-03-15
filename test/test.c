@@ -51,6 +51,11 @@ void print_result(struct test_info *tinfo) {
         if (tinfo->msg)
             printf("\t%s\n", tinfo->msg);
         break;
+    case ERROR:
+        printf(" - ERROR!\n");
+        if (tinfo->msg)
+            printf("\t%s\n", tinfo->msg);
+        break;
     case PASS:
         printf(" - Passed!\n");
         break;
@@ -81,6 +86,13 @@ void print_not_runs() {
     }
 }
 
+void print_errors() {
+    for (int i = 0; i < TEST_COUNT; i++) {
+        if (tests[i].result == ERROR)
+            print_result(&tests[i]);
+    }
+}
+
 void print_totals() {
     int pass = 0, fail = 0, skip = 0;
     for (int i = 0; i < TEST_COUNT; i++) {
@@ -98,6 +110,7 @@ void print_totals() {
 void print_results() {
     print_passes();
     print_failures();
+    print_errors();
     print_not_runs();
     print_totals();
 }
