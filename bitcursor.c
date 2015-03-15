@@ -11,7 +11,7 @@ void bitcursor_init(struct bitcursor *bc, void *buf, int len) {
 /* Reads up to 8 bits from the bitcursor. Values above 8 are truncated.
  * Reading 0 bits has no effect and *dst is unmodified.
  * Returns the number of bits read. Will be less than bits if we reach the
- * end of the cursor's buffer. Unread bits in *dst will be 0.
+ * end of the cursor's buffer. Returned bits are fully shifted right.
  */
 int bitcursor_upto8(struct bitcursor *bc, int cnt, uint8_t *dst) {
     if (cnt < 1) return 0;
@@ -22,8 +22,9 @@ int bitcursor_upto8(struct bitcursor *bc, int cnt, uint8_t *dst) {
         int high = 8 - bc->bit;
         int low = cnt - high;
         bc->bit = low;
-        *dst = ((*bc->cur++) & ((1 << high) - 1)) << low;
+        *dst = ((*bc->cur++) & ((1 << high) - 1));
         if (bc->cur >= bc->end) return high;
+        *dst <<= low;
         *dst |= (*bc->cur >> (8 - low));
     } else {
         int bits_left = 8 - bc->bit;
