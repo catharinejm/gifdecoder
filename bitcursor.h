@@ -16,5 +16,6 @@ struct bitcursor {
 };
 void bitcursor_init(struct bitcursor *bc, void *buf, int len);
 int bitcursor_upto8(struct bitcursor *bc, int cnt, uint8_t *dst);
+int bitcursor_upto16(struct bitcursor *bc, int cnt, uint16_t *dst);
 
 #endif

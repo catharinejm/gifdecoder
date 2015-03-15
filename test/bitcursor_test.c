@@ -56,15 +56,23 @@ int bit2byte(uint8_t *bytes, int bylen, uint8_t *bits, int bitlen) {
     return i;
 }
 
-int bytestring(uint8_t *bytes, int bylen, char *bitstr) {
-    uint8_t *bits = malloc(bylen*8);
-    if (!bits)
-        return -1;
-    int bitlen = bitstring(bits, bylen*8, bitstr);
-    int bcnt = bit2byte(bytes, bylen, bits, bitlen);
+int bytestring(uint8_t *bytes, char *bitstr) {
+    uint8_t bits[8];
+    int bitlen = bitstring(bits, 8, bitstr);
+    int bcnt = bit2byte(bytes, 1, bits, bitlen);
     
-    free(bits);
     return bcnt;
+}
+
+int shortstring(uint16_t *shrt, char *bitstr) {
+    uint8_t bits[16];
+    int bitlen = bitstring(bits, 16, bitstr);
+    *shrt = 0;
+    if (bitlen <= 8)
+        return bit2byte((uint8_t*)shrt, 1, bits, bitlen);
+    bit2byte(((uint8_t*)shrt)+1, 1, bits, 8);
+    int bcnt = bit2byte((uint8_t*)shrt, 1, bits+8, bitlen-8);
+    return 8+bcnt;
 }
 
 int byte2bit(uint8_t *bits, int bitlen, uint8_t *bytes, int bylen) {
@@ -93,13 +101,13 @@ DEFTEST(test_bitcursor_upto8_take5, "Consumes 5 bits at a time") {
     bitcursor_init(&bc, bytes, 4);
 
     uint8_t expected[sizeof(bits)];
-    bytestring(expected  , 1, "000 11110");
-    bytestring(expected+1, 1, "000 00001");
-    bytestring(expected+2, 1, "000 01010");
-    bytestring(expected+3, 1, "000 10110");
-    bytestring(expected+4, 1, "000 00110");
-    bytestring(expected+5, 1, "000 11101");
-    bytestring(expected+6, 1, "000 00011"); // last 2 bits
+    bytestring(expected  , "000 11110");
+    bytestring(expected+1, "000 00001");
+    bytestring(expected+2, "000 01010");
+    bytestring(expected+3, "000 10110");
+    bytestring(expected+4, "000 00110");
+    bytestring(expected+5, "000 11101");
+    bytestring(expected+6, "000 00011"); // last 2 bits
     uint8_t actual[sizeof(bits)];
     int bi, rcnt;
     for (bi = 0, rcnt = 0; bi < sizeof(bits); bi += 5, rcnt++) {
@@ -159,6 +167,14 @@ DEFTEST(test_byte_bit_unaligned, "unaligned bits are left shifted in last byte")
     return PASS;
 }
 
+DEFTEST(test_shortstring, "it returns a little-endian short of the given big-endian bytestring") {
+    uint16_t shrt;
+    shortstring(&shrt, "0000 1111 1111 0000");
+    if (shrt != 0x0FF0)
+        return FAIL;
+    return PASS;
+}
+
 DEFTEST(test_bitcursor_upto8_varying, "Consumes varying quantities of bits") {
     struct bitcursor bc;
     uint8_t bytes[4];
@@ -169,15 +185,87 @@ DEFTEST(test_bitcursor_upto8_varying, "Consumes varying quantities of bits") {
         arc4random_buf(bytes, 4);
         byte2bit(bits, 32, bytes, 4);
         for (int i = 0; i < 32;) {
-            int rcnt, take = arc4random_uniform(8) + 1;
+            int take = arc4random_uniform(8) + 1;
             uint8_t expected, actual;
             int real_take = (take+i >= 32) ? 32 - i : take;
             bit2byte(&expected, 1, bits+i, real_take);
             expected >>= 8-real_take;
-            rcnt = bitcursor_upto8(&bc, take, &actual);
+            bitcursor_upto8(&bc, take, &actual);
             if (actual != expected) {
                 char *msg = malloc(256);
                 snprintf(msg, 256, "Expected 0x%02hhX, got 0x%02hhX.\ti: %i, take: %i", expected, actual, i, take);
+                SET_MESSAGE(msg);
+                return FAIL;
+            }
+            i+=take;
+        }
+    }
+    return PASS;
+}
+
+DEFTEST(test_bitcursor_upto16_fixed, "Consumes a fixed bit quantity into 16-bit blocks") {
+    struct bitcursor bc;
+    /* 1111 0000  0101 0110 */
+    uint8_t bytes[2] = { 0xF0, 0x56 };
+    uint16_t expecteds[16];
+    shortstring(expecteds   , "0000 0000  0000 0001");
+    shortstring(expecteds+ 1, "0000 0000  0000 0011");
+    shortstring(expecteds+ 2, "0000 0000  0000 0111");
+    shortstring(expecteds+ 3, "0000 0000  0000 1111");
+    shortstring(expecteds+ 4, "0000 0000  0001 1110");
+    shortstring(expecteds+ 5, "0000 0000  0011 1100");
+    shortstring(expecteds+ 6, "0000 0000  0111 1000");
+    shortstring(expecteds+ 7, "0000 0000  1111 0000");
+    shortstring(expecteds+ 8, "0000 0001  1110 0000");
+    shortstring(expecteds+ 9, "0000 0011  1100 0001");
+    shortstring(expecteds+10, "0000 0111  1000 0010");
+    shortstring(expecteds+11, "0000 1111  0000 0101");
+    shortstring(expecteds+12, "0001 1110  0000 1010");
+    shortstring(expecteds+13, "0011 1100  0001 0101");
+    shortstring(expecteds+14, "0111 1000  0010 1011");
+    shortstring(expecteds+15, "1111 0000  0101 0110");
+
+    uint16_t actual;
+    for (int i = 0; i < 16; i++) {
+        bitcursor_init(&bc, bytes, 2);
+        bitcursor_upto16(&bc, i+1, &actual);
+        if (actual != expecteds[i]) {
+            char *msg = malloc(256);
+            snprintf(msg, 256, "expected 0x%04hX, got 0x%04hX\ti: %i", expecteds[i], actual, i);
+            SET_MESSAGE(msg);
+            return FAIL;
+        }
+    }
+    return PASS;
+}
+
+DEFTEST(test_bitcursor_upto16_varying, "Consumes varying quantities of bits into 16-bit blocks") {
+    struct bitcursor bc;
+    uint8_t bytes[8];
+    uint8_t bits[64];
+
+    for (int tries = 0; tries < 1000; tries++) {
+        bitcursor_init(&bc, bytes, 8);
+        arc4random_buf(bytes, 8);
+        byte2bit(bits, 64, bytes, 8);
+        for (int i = 0; i < 64;) {
+            int take = arc4random_uniform(16) + 1;
+            uint16_t expected = 0, actual = 0;
+            uint8_t high, low;
+            int real_take = (take+i >= 64) ? 64 - i : take;
+            if (real_take > 8) {
+                bit2byte(&high, 1, bits+i, (real_take > 8 ? 8 : real_take));
+                bit2byte(&low, 1, bits+i+8, real_take - 8);
+                expected = (high << 8) | low;
+                expected >>= 16-real_take;
+            } else {
+                bit2byte((uint8_t*)&expected, 1, bits+i, real_take);
+                expected >>= 8-real_take;
+            }
+            bitcursor_upto16(&bc, take, &actual);
+            if (actual != expected) {
+                char *msg = malloc(256);
+                snprintf(msg, 256, "Expected 0x%04hX, got 0x%04hX.\ti: %i, take: %i", expected, actual, i, take);
                 SET_MESSAGE(msg);
                 return FAIL;
             }
