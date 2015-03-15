@@ -3,13 +3,13 @@
 /* n is a byte offset from c->cur
  * pass n<0 to check backwards
  */
-static inline int cur_inrange(struct cursor *c, int n) {
+static inline int cur_inrange(struct bitcursor *c, int n) {
     uint8_t *addr = c->cur + n;
     return addr <= c->end && addr >= c->start;
 }
 
 /* pass n<0 to move backwards */
-static inline int cur_move(struct cursor *c, int n) {
+static inline int cur_move(struct bitcursor *c, int n) {
     if (cur_inrange(c, n)) {
         c->cur+=n;
         return n;
@@ -18,7 +18,7 @@ static inline int cur_move(struct cursor *c, int n) {
 }
 
 
-void validate_header(struct cursor *gif) {
+void validate_header(struct bitcursor *gif) {
     if (!cur_inrange(gif, 6))
         DIE_EOF("Invalid header");
     if (memcmp(gif->cur, GIF89a, 6))
@@ -34,7 +34,7 @@ struct buffer *alloc_buffer(int len) {
     return buf;
 }
 
-void read_ctable(struct buffer **ctbl, int ctbl_size, struct cursor *gif) {
+void read_ctable(struct buffer **ctbl, int ctbl_size, struct bitcursor *gif) {
     int ctbl_len = CTBL_LEN(ctbl_size);
     *ctbl = alloc_buffer(ctbl_len);
 
@@ -45,21 +45,21 @@ void read_ctable(struct buffer **ctbl, int ctbl_size, struct cursor *gif) {
         DIE_EOF("Failed to read ctable");
 }
 
-void copy_block(uint8_t *buf, int len, struct cursor *gif) {
+void copy_block(uint8_t *buf, int len, struct bitcursor *gif) {
     if (gif->cur + len < gif->end)
         memcpy(buf, gif->cur, len);
     else
         DIE_EOF("Failed to copy block");
 }
 
-static inline uint8_t get_byte(struct cursor *c) {
+static inline uint8_t get_byte(struct bitcursor *c) {
     if (c->cur < c->end)
         return *c->cur++;
     DIE_EOF("Getting byte");
     return -1;
 }
 
-void parse_screen_desc(struct screen_desc *sdesc, struct cursor *gif) {
+void parse_screen_desc(struct screen_desc *sdesc, struct bitcursor *gif) {
     if (!cur_inrange(gif, 7))
         DIE_EOF("Invalid screen description");
 
@@ -76,7 +76,7 @@ void parse_screen_desc(struct screen_desc *sdesc, struct cursor *gif) {
     sdesc->px_aspect = *gif->cur++;
 }
 
-void parse_image_desc(struct img_desc *idesc, struct cursor *gif) {
+void parse_image_desc(struct img_desc *idesc, struct bitcursor *gif) {
     if (!cur_inrange(gif, 9))
         DIE_EOF("Invalid image description");
 
@@ -108,7 +108,7 @@ struct ctable_ext *expand_ctable_ext(struct ctable_ext *ctbl_ext) {
 
 
 void decode_image(struct screen_desc *sdesc, struct img_desc *idesc,
-                  struct buffer *ctbl, struct buffer* img, struct cursor *gif)
+                  struct buffer *ctbl, struct buffer* img, struct bitcursor *gif)
 {
     int code_size;
     int blk_len;
@@ -180,7 +180,7 @@ void decode_image(struct screen_desc *sdesc, struct img_desc *idesc,
     }
 }
 
-void load_file(const char *fname, struct cursor *c) {
+void load_file(const char *fname, struct bitcursor *c) {
     int fd = open(fname, O_RDONLY);
     if (-1 == fd)
         DIE("Error opening file");
@@ -188,14 +188,13 @@ void load_file(const char *fname, struct cursor *c) {
     if (fstat(fd, &st) == -1)
         DIE("Failed to stat file");
     /* TODO: Don't map huge files! */
-    c->start = mmap(NULL, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
-    if (MAP_FAILED == c->start)
+    uint8_t *buf = mmap(NULL, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    if (MAP_FAILED == buf)
         DIE("Failed to mmap file");
-    c->end = ((uint8_t*) c->start) + st.st_size;
-    c->cur = (uint8_t*) c->start;
+    bitcursor_init(c, buf, st.st_size);
 }
 
-void parse_gif(struct cursor *gif) {
+void parse_gif(struct bitcursor *gif) {
     struct buffer *img;
     
     validate_header(gif);

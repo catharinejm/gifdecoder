@@ -8,39 +8,33 @@
 #include "test.h"
 #include "../decoder.h"
 
-static void init_cursor(struct cursor *c, void *contents, int len) {
-    c->start = contents;
-    c->end = (uint8_t*)contents + len;
-    c->cur = c->start;
-}
-
 DEFTEST(test_validate_header_valid) {
-    struct cursor gif;
+    struct bitcursor gif;
     
-    init_cursor(&gif, "GIF89a", 6);
+    bitcursor_init(&gif, "GIF89a", 6);
     validate_header(&gif);
     return PASS_UNLESS(test_did_exit);
 }
 
 DEFTEST(test_validate_header_eof) {
-    struct cursor gif;
+    struct bitcursor gif;
     
-    init_cursor(&gif, "GIF", 3);
+    bitcursor_init(&gif, "GIF", 3);
     validate_header(&gif);
     return PASS_IF(test_did_exit);
 }
 
 DEFTEST(test_validate_header_invalid) {
-    struct cursor gif;
+    struct bitcursor gif;
     
-    init_cursor(&gif, "crap56", 6);
+    bitcursor_init(&gif, "crap56", 6);
     validate_header(&gif);
     return PASS_IF(test_did_exit);
 }
 
 static void pack_sdesc(uint8_t *buf, struct screen_desc *sdesc) {
-    struct cursor c;
-    init_cursor(&c, buf, 7);
+    struct bitcursor c;
+    bitcursor_init(&c, buf, 7);
     (*c.cur16++) = sdesc->width;
     (*c.cur16++) = sdesc->height;
     uint8_t pack = 0;
@@ -59,7 +53,7 @@ DEFTEST(test_parse_screen_desc, "Parsing the logical screen descriptor") {
     pcg32_random_t rnd;
     pcg32_srandom_r(&rnd, time(NULL) ^ (intptr_t)&sprintf, (intptr_t)&memset);
 
-    struct cursor gif;
+    struct bitcursor gif;
     struct screen_desc expected, actual;
     uint8_t buf[7];
     int fails = 0;
@@ -78,7 +72,7 @@ DEFTEST(test_parse_screen_desc, "Parsing the logical screen descriptor") {
         expected.px_aspect = pcg32_random_r(&rnd);
 
         pack_sdesc(buf, &expected);
-        init_cursor(&gif, buf, 7);
+        bitcursor_init(&gif, buf, 7);
         parse_screen_desc(&actual, &gif);
 
         if (test_did_exit)

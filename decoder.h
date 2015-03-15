@@ -10,6 +10,8 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 
+#include "bitcursor.h"
+
 #ifdef _TEST_
 # include "test/test.h"
 #endif
@@ -42,19 +44,8 @@
 #define DIE_EOF(msg) DIE("Premature EOF: " msg)
 
 
-struct cursor {
-    union {
-        uint8_t  *cur;
-        uint16_t *cur16;
-        uint32_t *cur32;
-        uint64_t *cur64;
-    };
-    uint8_t *start;
-    uint8_t *end;
-};
-
-static inline int cur_inrange(struct cursor *c, int n);
-static inline int cur_move(struct cursor *c, int n);
+static inline int cur_inrange(struct bitcursor *c, int n);
+static inline int cur_move(struct bitcursor *c, int n);
 
 struct screen_desc {
     uint16_t width, height;
@@ -73,12 +64,12 @@ struct buffer {
 };
 struct buffer *alloc_buffer(int len);
 
-void validate_header(struct cursor *gif);
-void read_ctable(struct buffer **ctbl, int ctbl_size, struct cursor *gif);
-void copy_block(uint8_t *buf, int len, struct cursor *gif);
-static inline uint8_t get_byte(struct cursor *c);
-void parse_screen_desc(struct screen_desc *sdesc, struct cursor *gif);
-void parse_image_desc(struct img_desc *idesc, struct cursor *gif);
+void validate_header(struct bitcursor *gif);
+void read_ctable(struct buffer **ctbl, int ctbl_size, struct bitcursor *gif);
+void copy_block(uint8_t *buf, int len, struct bitcursor *gif);
+static inline uint8_t get_byte(struct bitcursor *c);
+void parse_screen_desc(struct screen_desc *sdesc, struct bitcursor *gif);
+void parse_image_desc(struct img_desc *idesc, struct bitcursor *gif);
 
 
 struct ctable_ext {
@@ -93,9 +84,9 @@ struct ctable_ext *expand_ctable_ext(struct ctable_ext *ctbl_ext);
     ((struct buffer*)(&cte->ctbl.buf + cte->offsets[idx]))
 
 void decode_image(struct screen_desc *sdesc, struct img_desc *idesc,
-                  struct buffer *ctbl, struct buffer* img, struct cursor *gif);
+                  struct buffer *ctbl, struct buffer* img, struct bitcursor *gif);
 
-void load_file(const char *fname, struct cursor *c);
-void parse_gif(struct cursor *gif);
+void load_file(const char *fname, struct bitcursor *c);
+void parse_gif(struct bitcursor *gif);
 
 #endif
