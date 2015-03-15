@@ -1,14 +1,4 @@
-struct bitcursor {
-    union {
-        uint8_t *cur;
-        uint16_t *cur16;
-        uint32_t *cur32;
-        uint64_t *cur64;
-    };
-    uint8_t *start;
-    uint8_t *end;
-    uint8_t bit;
-};
+#include "bitcursor.h"
 
 void bitcursor_init(struct bitcursor *bc, void *buf, int len) {
     bc->start = (uint8_t*)buf;
@@ -24,7 +14,7 @@ void bitcursor_init(struct bitcursor *bc, void *buf, int len) {
  * end of the cursor's buffer. Unread bits in *dst will be 0.
  */
 int bitcursor_upto8(struct bitcursor *bc, int cnt, uint8_t *dst) {
-    if (!cnt) return 0;
+    if (cnt < 1) return 0;
     if (cnt > 8) cnt = 8;
     if (bc->cur >= bc->end) return 0;
 
