@@ -1,6 +1,6 @@
 TARGETS = test
 CC = gcc -ggdb $(TEST_DEFS)
-TEST_FILES = $(shell find . -name \*_test.c)
+TEST_FILES ?= $(shell find . -name \*_test.c)
 TEST_OBJS = $(TEST_FILES:.c=.o)
 PROG_OBJS = $(patsubst %_test.c,../%.c,$(TEST_FILES))
 OBJS = $(TEST_OBJS) test.o ../pcg/pcg_basic.o $(PROG_OBJS)

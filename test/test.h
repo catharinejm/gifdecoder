@@ -2,6 +2,7 @@
 #define _TEST_TEST_H_
 
 #include <stddef.h>
+#include <stdint.h>
 
 #ifndef TEST_COUNT
 # error TEST_COUNT undefined!

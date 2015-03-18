@@ -46,6 +46,8 @@ void read_ctable(struct buffer **ctbl, int ctbl_size, struct bitcursor *gif) {
 }
 
 void copy_block(uint8_t *buf, int len, struct bitcursor *gif) {
+    if (gif->bit)
+        DIE("Unaligned block copy");
     if (gif->cur + len < gif->end)
         memcpy(buf, gif->cur, len);
     else
@@ -53,6 +55,8 @@ void copy_block(uint8_t *buf, int len, struct bitcursor *gif) {
 }
 
 static inline uint8_t get_byte(struct bitcursor *c) {
+    if (c->bit)
+        DIE("Unaligned byte read");
     if (c->cur < c->end)
         return *c->cur++;
     DIE_EOF("Getting byte");
@@ -112,70 +116,98 @@ void decode_image(struct screen_desc *sdesc, struct img_desc *idesc,
 {
     int code_size;
     int blk_len;
-    uint8_t codes[256];
     struct ctable_ext *ctbl_ext = calloc(sizeof(struct ctable_ext) + 4096, 1);
     ctbl_ext->ctbl.len = 4096;
-    int clear_code, eoi_code, inc_cs_flag;
+    int clear_code, eoi_code, inc_cs_flag, prev_code = 0;
 
     const int sc_row_len = sdesc->width * PXSIZE;
     const int img_row_len = idesc->width * PXSIZE;
     const int img_top = sc_row_len * idesc->top;
     const int img_left = idesc->left * PXSIZE;
-    const int img_right = img_left + img_row_len;
+    const int wrap_offset = sc_row_len - img_row_len;
 
+    int img_row_end = img_left + img_row_len;
     int img_idx = img_top + img_left;
 
-    code_size = get_byte(gif) + 1;
+    const int min_code_size = get_byte(gif) + 1;
+    code_size = min_code_size;
     clear_code = 1 << (code_size - 1);
     eoi_code = clear_code + 1;
     inc_cs_flag = (1 << code_size) - 1;
 
     while ((blk_len = get_byte(gif))) {
-        copy_block(codes, blk_len, gif);
-        int byte_idx = 0;
-        int bit_idx = 7;
-        while (1) {
-            int bits_read = 0;
-            int mask, code;
-            if (bit_idx < code_size) {
-                code = codes[byte_idx++] << 8;
-                bits_read += bit_idx + 8;
-                bit_idx = 7;
-                
-                if (bits_read < code_size) {
-                    if (byte_idx >= blk_len)
-                        DIE("Premature end of sub-block");
-                    code <<= 8;
-                    code |= codes[byte_idx++];
-                    bits_read += 8;
-                }
-                if (bits_read > code_size)
-                    code >>= bits_read - code_size;
+        if (! cur_inrange(&gif, blk_len))
+            DIE_EOF("Reading sub-block");
 
-                /* TODO: All these image_right checks are wrong :-/
-                 *       Need to adjust for the row too
-                 */
-                int coff = code * PXSIZE;
-                if (coff < ctbl->len) {
-                    memcpy(&img->buf+img_idx, &ctbl->buf+coff, PXSIZE);
-                    img_idx += PXSIZE;
-                    if (img_idx >= img_right)
-                        img_idx += sc_row_len - img_row_len;
-                    if (img_idx >= img->len)
-                        DIE("Past end of image data");
-                } else {
-                    struct buffer *cte_entry = CTE_GET(ctbl_ext, coff);
-                    if (img_idx + cte_entry->len > img_right) {
-                        // copy portion that fits into img
-                        // wrap img_idx
-                        // copy remaining portion
-                    } else {
-                        // copy whole thing
-                        // bump img_idx, wrap if necessary
+        struct bitcursor codes;
+        bitcursor_init(&codes, gif->cur, blk_len);
+        uint16_t code;
+        if (bitcursor_upto16(&codes, code_size, &code) == code_size) {
+            if (code == clear_code) {
+                free(ctbl_ext);
+                ctbl_ext = calloc(sizeof(struct ctable_ext) + 4096, 1);
+                ctbl_ext->ctbl.len = 4096;
+                code_size = min_code_size;
+                continue;
+            }
+            int coff = code * PXSIZE;
+            if (coff < ctbl->len) {
+                memcpy(&img->buf+img_idx, &ctbl->buf+coff, PXSIZE);
+                img_idx += PXSIZE;
+                if (img_idx >= img_row_end) {
+                    img_idx += wrap_offset;
+                    img_row_end += sc_row_len;
+                }
+                if (img_idx >= img->len || img_row_end >= img->len)
+                    DIE("Past end of image data");
+                if (prev_code) { // will be 0 on init
+                    int poff = prev_code * PXSIZE;
+                    if (poff < ctbl->len) {
+                        if (ctbl_ext->ctbl.len + sizeof(struct buffer)+6
                     }
                 }
-                //TODO: Extend ctbl_ext with new code
+            } else {
+                struct buffer *cte_entry = CTE_GET(ctbl_ext, coff-ctbl->len);
+                int copied = 0;
+                while (img_idx + cte_entry->len - copied > img_row_end) {
+                    // copy portion that fits into img
+                    int fits = img_row_end - img_idx;
+                    memcpy(&img->buf+img_idx, cte_entry->buf+copied, fits);
+                    copied += fits;
+                    // wrap img_idx and img_row_end
+                    img_idx += wrap_offset + fits;
+                    img_row_end += sc_row_len;
+                    if (img_idx >= img->len || img_row_end >= img->len)
+                        DIE("Past end of image data");
+                }
+                if (copied < cte_entry->len) {
+                    // copy remainder (or possibly first go)
+                    memcpy(&img->buf+img_idx, cte_entry->buf+copied, cte_entry->len-copied);
+                    // bump img_idx, wrap if necessary
+                    img_idx += cte_entry->len-copied;
+                    if (img_idx >= img_row_end) {
+                        img_idx += wrap_offset;
+                        img_row_end += sc_row_len;
+                    }
+                    if (img_idx >= img->len || img_row_end >= img->len)
+                        DIE("Past end of image data");
+                }
             }
+
+            // increase codesize if necessary
+            if (code == inc_cs_flag) {
+                code_size++;
+                clear_code = 1 << (code_size - 1);
+                eoi_code = clear_code + 1;
+                inc_cs_flag = (1 << code_size) - 1;
+            }
+            // remember previous code
+            prev_code = code;
+        } else {
+            if (codes.cur+1 == codes.end)
+                gif->cur = codes.end;
+            else
+                DIE_EOF("Premature end of sub-block");
         }
     }
 }
