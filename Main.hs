@@ -15,40 +15,7 @@ import Data.Bits
 import Data.Binary.Get hiding (getBytes)
 import Data.Char (ord)
 
-data Canvas = Canvas { cvWidth         :: !Int
-                     , cvHeight        :: !Int
-                     , cvBgColorIdx    :: !Int
-                     , cvPxAspectRatio :: !Double
-                     , cvColorTable    :: Maybe ColorTable
-                     }
-data Color = Color { colorRed   :: !Word8
-                   , colorGreen :: !Word8
-                   , colorBlue  :: !Word8
-                   }
-type ColorTable = V.Vector Color
-
-data Image = Image { imgLeft         :: !Int
-                   , imgTop          :: !Int
-                   , imgWidth        :: !Int
-                   , imgHeight       :: !Int
-                   , imgIsInterlaced :: !Bool
-                   , imgColorTable   :: Maybe ColorTable
-                   }
-
-data LScreenDesc = LSD { lsdHasCT    :: !Bool
-                       , lsdColorRes :: !Int
-                       , lsdIsDesc   :: !Bool
-                       , lsdCTSize   :: !Int
-                       }
-
-data GfxControlExt = GCE { gceDisposal  :: !Int
-                         , gceUserInput :: !Bool
-                         , gceHasTransp :: !Bool
-                         , gceDelayTime :: !Int
-                         , gceTranspIdx :: !Int
-                         }
-
-type GIFParser = RWST Canvas BS.ByteString Image Get
+import Types
 
 imageSeparator :: Word8
 imageSeparator = 0x2C
@@ -79,8 +46,10 @@ parseLSD lsdByte = LSD hasCT colorRes isDesc ctSize
     isDesc = lsdByte .&. 0x08 /= 0
     ctSize = 1 `shift` (fromIntegral (lsdByte .&. 0x07))
 
+
 toI :: Integral i => i -> Int
 toI = fromIntegral
+
 
 decodeCanvas :: Get Canvas
 decodeCanvas = do
@@ -115,6 +84,7 @@ groupsOf n bs = map fst splits
     splits :: [(BS.ByteString, BS.ByteString)]
     splits = tail $ iterate mkSplits (BS.empty, bs)
     mkSplits (_, rem) = BS.splitAt n rem
+
 
 parseGfxControlExt :: Get GfxControlExt
 parseGfxControlExt = do
