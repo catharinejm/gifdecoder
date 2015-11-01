@@ -10,21 +10,23 @@ data Canvas = Canvas { cvWidth         :: !Int
                      , cvHeight        :: !Int
                      , cvBgColorIdx    :: !Int
                      , cvPxAspectRatio :: !Double
-                     , cvColorTable    :: Maybe ColorTable
+                     , cvColorTable    :: !(Maybe ColorTable)
                      }
+
 data Color = Color { colorRed   :: !Word8
                    , colorGreen :: !Word8
                    , colorBlue  :: !Word8
                    }
+
 type ColorTable = V.Vector Color
 
-data Image = Image { imgLeft         :: !Int
-                   , imgTop          :: !Int
-                   , imgWidth        :: !Int
-                   , imgHeight       :: !Int
-                   , imgIsInterlaced :: !Bool
-                   , imgColorTable   :: Maybe ColorTable
-                   }
+data ImageDesc = ImageDesc { imgLeft         :: !Int
+                           , imgTop          :: !Int
+                           , imgWidth        :: !Int
+                           , imgHeight       :: !Int
+                           , imgIsInterlaced :: !Bool
+                           , imgColorTable   :: !ColorTable
+                           }
 
 data LScreenDesc = LSD { lsdHasCT    :: !Bool
                        , lsdColorRes :: !Int
@@ -39,4 +41,38 @@ data GfxControlExt = GCE { gceDisposal  :: !Int
                          , gceTranspIdx :: !Int
                          }
 
-type GIFParser = RWST Canvas BS.ByteString Image Get
+data CodeTable = CodeTable { ctMinCodeSize :: !Int
+                           , ctClearCode   :: !Int
+                           , ctEOI         :: !Int
+                           , ctLen         :: !Int
+                           , ctCodes       :: ![Int]
+                           }
+
+data DispatchByte = ImageSeparator
+                  | ExtensionIntroducer
+                  | GfxControlLabel
+                  | EndOfGif
+                  | UnknownDispatch !Word8
+
+dispatchByte :: Word8 -> DispatchByte
+dispatchByte 0x2C = ImageSeparator
+dispatchByte 0x21 = ExtensionIntroducer
+dispatchByte 0xF9 = GfxControlLabel
+dispatchByte 0x3B = EndOfGif
+dispatchByte b    = UnknownDispatch b
+
+data ParseState = ParseState { psCodeTable :: !CodeTable
+                             , psGCE       :: !(Maybe GfxControlExt)
+                             , psImageDesc :: !ImageDesc
+                             }
+
+data ImageData = ImageData { imgDatDesc   :: !ImageDesc
+                           , imgDatColors :: !(V.Vector Color)
+                           }
+
+data DataSegment = ImageDataSeg !ImageData
+                 | PlainTextData
+                 | ApplicationData
+                 | CommentData
+
+type ImageDataParser = RWST Canvas ImageData ParseState Get

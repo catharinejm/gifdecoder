@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE NamedFieldPuns #-}
 
 module Main where
 
@@ -14,21 +15,9 @@ import Data.Word
 import Data.Bits
 import Data.Binary.Get hiding (getBytes)
 import Data.Char (ord)
+import Text.Printf (printf)
 
 import Types
-
-imageSeparator :: Word8
-imageSeparator = 0x2C
-
-extensionIntroduer :: Word8
-extensionIntroduer = 0x21
-
-graphicControlLabel :: Word8
-graphicControlLabel = 0xF9
-
-endOfGif :: Word8
-endOfGif = 0x3B
-
 
 validateHeader :: Get ()
 validateHeader = do
@@ -104,10 +93,44 @@ parseGfxControlExt = do
     getTransp b = b .&. 0x01 /= 0
 
 
--- decodeGif :: Get Word8
--- decodeGif = do
---   validateHeader
---   canvas <- decodeCanvas
+extractImageHeaders :: Get (ImageDesc, Maybe GfxControlExt)
+extractImageHeaders = do
+  gfxControlRes <- parseGfxControlExt
+  case gfxControlRes of
+   Right gce -> do imgHeaders <- parseImageHeaders Nothing
+                   return (imgHeaders, Just gce)
+   Left byte -> do imgHeaders <- parseImageHeaders (Just byte)
+                   return (imgHeadres, Nothing)
+
+  
+decodeImageData :: ImageDataParser ()
+
+getDataSegments :: Canvas -> Get [DataSegment]
+getDataSegments canvas = do
+  byte <- getWord8
+  getSegment (dispatchByte byte) []
+  where
+    getSegment EndOfGif segs = return segs
+    getSegment ExtensionIntroducer segs = getWord8 >>= (\b -> getSegment b segs)
+    getSegment GfxControlLabel segs = do gce <- parseGfxControlExt
+                                      doImageDecode (Just gce)
+    getSegment ImageSeparator segs = doImageDecode Nothing
+    getSegment (UnknownDispatch b) = error $ printf "Unknown dispatch byte: 0x%02X" b
+    doImageDecode mbGce = do (imgDesc, colorTab, codeTab) <- parseImageDesc
+                             let parseState = ParseState codeTab mbGce imgDesc
+                             (_, _, imgData) <- runRWST decodeImageData canvas parseState
+                             return ((ImageDataSeg imgData) : segs)
+
+
+parseGif :: Get [DataSegment]
+parseGif = do
+  validateHeader
+  canvas <- decodeCanvas
+  getDataSegments canvas
+
+  
+  
+  
 
 main :: IO ()
 main = putStrLn "hi there"
