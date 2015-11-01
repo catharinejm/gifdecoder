@@ -77,7 +77,7 @@ groupsOf n bs = map fst splits
 
 parseGfxControlExt :: Get GfxControlExt
 parseGfxControlExt = do
-  skip 2 -- Gfx Control Label and Block size (always 0xF9, 0x04)
+  skip 1 -- Block size (always 0x04)
   packed <- getWord8
   delayTimeW <- getWord16le
   transpIdxW <- getWord8
@@ -93,33 +93,61 @@ parseGfxControlExt = do
     getTransp b = b .&. 0x01 /= 0
 
 
-extractImageHeaders :: Get (ImageDesc, Maybe GfxControlExt)
-extractImageHeaders = do
-  gfxControlRes <- parseGfxControlExt
-  case gfxControlRes of
-   Right gce -> do imgHeaders <- parseImageHeaders Nothing
-                   return (imgHeaders, Just gce)
-   Left byte -> do imgHeaders <- parseImageHeaders (Just byte)
-                   return (imgHeadres, Nothing)
+parseImageDesc :: Get ImageDesc
+parseImageDesc = do
+  left <- getWord16le
+  top <- getWord16le
+  width <- getWord16le
+  height <- getWord16le
+  packed <- getWord8
+  let hasColorTab = packed .&. 0x80 /= 0
+      isInterlaced = packed .&. 0x40 /= 0
+      colorTabSize = 1 `shift` (fromIntegral $ (packed .&. 0x07))
+      imgDesc = ImageDesc (toI left) (toI top) (toI width) (toI height) isInterlaced
+  if hasColorTab
+    then do colorTab <- getColorTable colorTabSize
+            return $ imgDesc (Just colorTab)
+    else return $ imgDesc Nothing
 
-  
-decodeImageData :: ImageDataParser ()
+
+orElse :: Maybe a -> Maybe a -> Maybe a
+orElse Nothing mb = mb
+orElse ma      _  = ma
+
+buildCodeTable :: Int -> ColorTable -> CodeTable
+buildCodeTable maxCode colorTab =
+  CodeTable maxCode (maxCode+1) (maxCode+2) (V.fromList initialCodes)
+  where
+    initialCodes = map (\x -> [x]) [0..(V.length colorTab)-1]
+
 
 getDataSegments :: Canvas -> Get [DataSegment]
-getDataSegments canvas = do
+getDataSegments canvas @ Canvas { cvColorTable } = do
   byte <- getWord8
-  getSegment (dispatchByte byte) []
+  getSegment (dispatchByte byte) Nothing []
   where
-    getSegment EndOfGif segs = return segs
-    getSegment ExtensionIntroducer segs = getWord8 >>= (\b -> getSegment b segs)
-    getSegment GfxControlLabel segs = do gce <- parseGfxControlExt
-                                      doImageDecode (Just gce)
-    getSegment ImageSeparator segs = doImageDecode Nothing
-    getSegment (UnknownDispatch b) = error $ printf "Unknown dispatch byte: 0x%02X" b
-    doImageDecode mbGce = do (imgDesc, colorTab, codeTab) <- parseImageDesc
-                             let parseState = ParseState codeTab mbGce imgDesc
-                             (_, _, imgData) <- runRWST decodeImageData canvas parseState
-                             return ((ImageDataSeg imgData) : segs)
+    getSegment :: DispatchByte -> Maybe GfxControlExt -> [DataSegment] -> Get [DataSegment]
+    getSegment EndOfGif gce segs = return segs
+    getSegment ExtensionIntroducer gce segs = getWord8 >>= (\b -> getSegment (dispatchByte b) gce segs)
+    getSegment GfxControlLabel _ segs = do gce <- parseGfxControlExt
+                                           b <- getWord8
+                                           getSegment (dispatchByte b) (Just gce) segs
+    getSegment ImageSeparator gce segs =
+      do imgDesc @ ImageDesc { imgColorTable } <- parseImageDesc
+         minSizeByte <- getWord8
+         let maxCode = (1 `shift` (toI minSizeByte)) - 1
+             colorTab = case imgColorTable `orElse` cvColorTable of
+                         Just ct -> ct
+                         Nothing -> error "No color table found!"
+             codeTab = buildCodeTable maxCode colorTab
+             parseState = ParseState codeTab gce imgDesc
+         (_, _, colors) <- runRWST decodeImageData canvas parseState
+         return ((ImageData imgDesc colors) : segs)
+    getSegment (UnknownDispatch b) _ _ = error $ printf "Unknown dispatch byte: 0x%02X" b
+
+
+decodeImageData :: ImageDataParser ()
+decodeImageData = return ()
 
 
 parseGif :: Get [DataSegment]
@@ -129,8 +157,5 @@ parseGif = do
   getDataSegments canvas
 
   
-  
-  
-
 main :: IO ()
 main = putStrLn "hi there"

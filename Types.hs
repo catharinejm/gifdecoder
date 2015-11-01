@@ -25,7 +25,7 @@ data ImageDesc = ImageDesc { imgLeft         :: !Int
                            , imgWidth        :: !Int
                            , imgHeight       :: !Int
                            , imgIsInterlaced :: !Bool
-                           , imgColorTable   :: !ColorTable
+                           , imgColorTable   :: !(Maybe ColorTable)
                            }
 
 data LScreenDesc = LSD { lsdHasCT    :: !Bool
@@ -41,11 +41,10 @@ data GfxControlExt = GCE { gceDisposal  :: !Int
                          , gceTranspIdx :: !Int
                          }
 
-data CodeTable = CodeTable { ctMinCodeSize :: !Int
-                           , ctClearCode   :: !Int
-                           , ctEOI         :: !Int
-                           , ctLen         :: !Int
-                           , ctCodes       :: ![Int]
+data CodeTable = CodeTable { ctMaxCode   :: !Int
+                           , ctClearCode :: !Int
+                           , ctEOI       :: !Int
+                           , ctCodes     :: !(V.Vector [Int])
                            }
 
 data DispatchByte = ImageSeparator
@@ -66,13 +65,11 @@ data ParseState = ParseState { psCodeTable :: !CodeTable
                              , psImageDesc :: !ImageDesc
                              }
 
-data ImageData = ImageData { imgDatDesc   :: !ImageDesc
-                           , imgDatColors :: !(V.Vector Color)
-                           }
-
-data DataSegment = ImageDataSeg !ImageData
+data DataSegment = ImageData { imgDatDesc   :: !ImageDesc
+                             , imgDatColors :: !(V.Vector Color)
+                             }
                  | PlainTextData
                  | ApplicationData
                  | CommentData
 
-type ImageDataParser = RWST Canvas ImageData ParseState Get
+type ImageDataParser = RWST Canvas (V.Vector Color) ParseState Get
