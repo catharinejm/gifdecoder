@@ -7,13 +7,18 @@ import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BSL
 import qualified Data.ByteString.Char8 as C
 import qualified Data.ByteString.Lazy.Char8 as CL
+
+import Data.List (foldl')
+
+import Data.Vector ((!))
 import qualified Data.Vector as V
 
 import Control.Monad.RWS.Lazy
 
 import Data.Word
 import Data.Bits
-import Data.Binary.Get hiding (getBytes)
+import Data.Binary.Get
+import Data.Binary.BitGet
 import Data.Char (ord)
 import Text.Printf (printf)
 
@@ -114,11 +119,11 @@ orElse :: Maybe a -> Maybe a -> Maybe a
 orElse Nothing mb = mb
 orElse ma      _  = ma
 
-buildCodeTable :: Int -> ColorTable -> CodeTable
-buildCodeTable maxCode colorTab =
-  CodeTable maxCode (maxCode+1) (maxCode+2) (V.fromList initialCodes)
+buildCodeTable :: Int -> V.Vector [Int] -> CodeTable
+buildCodeTable codeSize initialCodes =
+  CodeTable codeSize maxCode (maxCode+1) (maxCode+2) initialCodes
   where
-    initialCodes = map (\x -> [x]) [0..(V.length colorTab)-1]
+    maxCode = (1 `shiftL` (toI minSizeByte)) - 1
 
 
 getDataSegments :: Canvas -> Get [DataSegment]
@@ -134,21 +139,31 @@ getDataSegments canvas @ Canvas { cvColorTable } = do
                                            getSegment (dispatchByte b) (Just gce) segs
     getSegment ImageSeparator gce segs =
       do imgDesc @ ImageDesc { imgColorTable } <- parseImageDesc
-         minSizeByte <- getWord8
-         let maxCode = (1 `shift` (toI minSizeByte)) - 1
-             colorTab = case imgColorTable `orElse` cvColorTable of
+         minSize <- getWord8
+         let colorTab = case imgColorTable `orElse` cvColorTable of
                          Just ct -> ct
                          Nothing -> error "No color table found!"
-             codeTab = buildCodeTable maxCode colorTab
-             parseState = ParseState codeTab gce imgDesc
-         (_, _, colors) <- runRWST decodeImageData canvas parseState
+             initialCodes = map (\x -> [x]) [0..(V.length colorTab)-1]
+             parseEnv = ParseEnv initialCodes minSize
+             codeTab = buildCodeTable minSize initialCodes
+         (_, indices) <- execRWST decodeIndexStream parseEnv codeTab
+         -- indices is in reverse order, foldl results in correct order
+         let colors = V.fromList (foldl' (\acc idx -> (colorTab ! idx) : acc) [] indices)
          return ((ImageData imgDesc colors) : segs)
     getSegment (UnknownDispatch b) _ _ = error $ printf "Unknown dispatch byte: 0x%02X" b
 
 
-decodeImageData :: ImageDataParser ()
-decodeImageData = return ()
+readCodes :: RWST ParseEnv 
 
+decodeIndexStream :: ImageDataParser ()
+decodeIndexStream = do
+  dataLen <- lift getWord8
+  if dataLen == 0
+    then return ()
+    else do dataBytes <- lift $ getByteString dataLen
+            let res = runBitGet dataBytes $ do
+                  
+  
 
 parseGif :: Get [DataSegment]
 parseGif = do
@@ -159,3 +174,4 @@ parseGif = do
   
 main :: IO ()
 main = putStrLn "hi there"
+n
