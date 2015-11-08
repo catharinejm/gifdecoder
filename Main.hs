@@ -28,7 +28,7 @@ validateHeader :: Get ()
 validateHeader = do
   header <- getByteString 6
   if header /= C.pack "GIF89a"
-    then error "Invalid header. Only GIF 89a supported"
+    then fail "Invalid header. Only GIF 89a supported"
     else return ()
 
 
@@ -38,7 +38,7 @@ parseLSD lsdByte = LSD hasCT colorRes isDesc ctSize
     hasCT = lsdByte .&. 0x80 /= 0
     colorRes = fromIntegral $ ((lsdByte .&. 0x70) `shiftR` 4) + 1
     isDesc = lsdByte .&. 0x08 /= 0
-    ctSize = 1 `shift` (fromIntegral (lsdByte .&. 0x07))
+    ctSize = 1 `shift` (toI ((lsdByte .&. 0x07) + 1))
 
 
 toI :: Integral i => i -> Int
@@ -152,30 +152,45 @@ getDataSegments canvas @ Canvas { cvColorTable } = do
          minSize <- getWord8
          let colorTab = case imgColorTable `orElse` cvColorTable of
                          Just ct -> ct
-                         Nothing -> error "No color table found!"
+                         Nothing -> fail "No color table found!"
              initialCodes = V.fromList $ map (\x -> [fromIntegral x]) [0..(V.length colorTab)-1]
              parseEnv = ParseEnv initialCodes (toI minSize)
              codeTab = buildCodeTable parseEnv
          (_, indices) <- execRWST decodeIndexStream parseEnv codeTab
-         let colors = V.fromList (foldr (\idx acc -> (colorTab ! fromIntegral idx) : acc) [] indices)
+         let colors = V.fromList (foldr (\idx acc -> (colorTab ! idx) : acc) [] indices)
          return ((ImageData imgDesc colors) : segs)
-    getSegment (UnknownDispatch b) _ _ = error $ printf "Unknown dispatch byte: 0x%02X" b
+    getSegment (UnknownDispatch b) _ _ = fail $ printf "Unknown dispatch byte: 0x%02X" b
 
 
-readCodes :: CodeReader ()
-readCodes = do
-  codeTable @ CodeTable { ctCodeSize, ctClearCode } <- get
+readCodes :: Maybe Int -> CodeReader ()
+readCodes lastCode = do
+  codeTable @ CodeTable { ctCodeSize } <- get
   code <- lift $ Bits.getWord16be ctCodeSize
   case codeMatch codeTable code of
    ClearCode -> do env <- ask
                    put (buildCodeTable env)
-                   readCodes
+                   readCodes Nothing
    MaxCode -> do put $ increaseCodeSize codeTable
-                 tell [code]
-                 readCodes
+                 getIndices $ toI code
+                 readCodes (Just $ toI code)
    EndOfInputCode -> return ()
-   BasicCode -> tell [code] >> readCodes
-  
+   BasicCode -> getIndices (toI code) >> readCodes (Just $ toI code)
+  where
+    getIndices :: Int -> CodeReader ()
+    getIndices code = do
+      codeTable @ CodeTable { ctCodes } <- get
+      case lastCode of
+       Nothing -> tell (ctCodes ! code)
+       Just lc -> if toI code < V.length ctCodes
+                  then do let idxs @ (k:_) = ctCodes ! code
+                              lastIdxs = ctCodes ! lc
+                          tell idxs
+                          put codeTable { ctCodes = V.snoc ctCodes (lastIdxs ++ [k]) }
+                  else do let lastIdxs @ (k:_) = ctCodes ! lc
+                              newIdxs = lastIdxs ++ [k]
+                          tell newIdxs
+                          put codeTable { ctCodes = V.snoc ctCodes newIdxs }
+
 
 decodeIndexStream :: ImageDataParser ()
 decodeIndexStream = do
@@ -186,7 +201,7 @@ decodeIndexStream = do
             codes <- get
             bytes <- lift $ getByteString (toI dataLen)
             let (newCodes, indices) = runGet (Bits.runBitGet $ do
-                                                 (_, nc, idxs) <- runRWST readCodes env codes
+                                                 (_, nc, idxs) <- runRWST (readCodes Nothing) env codes
                                                  return (nc, idxs))
                                       (BSL.fromStrict bytes)
             put newCodes
@@ -204,9 +219,14 @@ parseGif = do
   
 main :: IO ()
 main = do
-  let (canvas, segments) = runGet parseGif image
-      (img : _) = sortBy topLeft (filter isImage segments)
-  putStrLn $ show (imgDatColors img)
+  case runGetOrFail parseGif image of
+   Left (bs, off, err) -> do putStrLn err
+                             putStrLn $ show $ map ((printf "0x%02X")::Word8->String) (BSL.unpack bs)
+                             putStrLn $ "Offset: " ++ show off
+   Right (_, _, (canvas, segments)) ->
+     -- let (img : _) = sortBy topLeft (filter isImage segments) in
+     --  putStrLn $ show (imgDatColors img)
+     putStrLn $ show segments
   where
     isImage (ImageData _ _) = True
     isImage _             = False

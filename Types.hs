@@ -15,6 +15,7 @@ data Canvas = Canvas { cvWidth         :: !Int
                      , cvPxAspectRatio :: !Double
                      , cvColorTable    :: !(Maybe ColorTable)
                      }
+            deriving Show
 
 data Color = Color { colorRed   :: !Word8
                    , colorGreen :: !Word8
@@ -31,12 +32,14 @@ data ImageDesc = ImageDesc { imgLeft         :: !Int
                            , imgIsInterlaced :: !Bool
                            , imgColorTable   :: !(Maybe ColorTable)
                            }
+               deriving Show
 
 data LScreenDesc = LSD { lsdHasCT    :: !Bool
                        , lsdColorRes :: !Int
                        , lsdIsDesc   :: !Bool
                        , lsdCTSize   :: !Int
                        }
+                 deriving Show
 
 data GfxControlExt = GCE { gceDisposal  :: !Int
                          , gceUserInput :: !Bool
@@ -44,13 +47,15 @@ data GfxControlExt = GCE { gceDisposal  :: !Int
                          , gceDelayTime :: !Int
                          , gceTranspIdx :: !Int
                          }
+                   deriving Show
 
 data CodeTable = CodeTable { ctCodeSize  :: !Int
                            , ctMaxCode   :: !Word16
                            , ctClearCode :: !Word16
                            , ctEOI       :: !Word16
-                           , ctCodes     :: !(V.Vector [Word16])
+                           , ctCodes     :: !(V.Vector [Int])
                            }
+               deriving Show
 
 data CodeMatch = MaxCode
                | ClearCode
@@ -67,6 +72,7 @@ data DispatchByte = ImageSeparator
                   | GfxControlLabel
                   | EndOfGif
                   | UnknownDispatch !Word8
+                  deriving Show
 
 dispatchByte :: Word8 -> DispatchByte
 dispatchByte 0x2C = ImageSeparator
@@ -75,9 +81,10 @@ dispatchByte 0xF9 = GfxControlLabel
 dispatchByte 0x3B = EndOfGif
 dispatchByte b    = UnknownDispatch b
 
-data ParseEnv = ParseEnv { peBaseCodeTable :: !(V.Vector [Word16])
+data ParseEnv = ParseEnv { peBaseCodeTable :: !(V.Vector [Int])
                          , peMinCodeSize   :: !Int
                          }
+                deriving Show
 
 data DataSegment = ImageData { imgDatDesc   :: !ImageDesc
                              , imgDatColors :: !(V.Vector Color)
@@ -85,6 +92,7 @@ data DataSegment = ImageData { imgDatDesc   :: !ImageDesc
                  | PlainTextData
                  | ApplicationData
                  | CommentData
+                 deriving Show
 
-type CodeReader = RWST ParseEnv [Word16] CodeTable BitGet
-type ImageDataParser = RWST ParseEnv [Word16] CodeTable Get
+type CodeReader = RWST ParseEnv [Int] CodeTable BitGet
+type ImageDataParser = RWST ParseEnv [Int] CodeTable Get
