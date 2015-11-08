@@ -66,9 +66,12 @@ decodeCanvas = do
 getColorTable :: Int -> Get ColorTable
 getColorTable n = do
   bytes <- getByteString (n * 3)
-  return $ V.fromList (parseColorTable bytes)
+  return $ V.fromList (parseColorTable bytes [])
   where
-    parseColorTable bytes = map mkColor (groupsOf 3 bytes)
+    parseColorTable bytes colors = if BS.null bytes
+                                   then reverse colors
+                                   else let (hd, tl) = BS.splitAt 3 bytes in
+                                         parseColorTable tl ((mkColor hd) : colors)
     mkColor bs = let [r,g,b] = BS.unpack bs in
                   Color r g b
 
@@ -127,14 +130,11 @@ buildCodeTable ParseEnv { peMinCodeSize, peBaseCodeTable } =
     maxCode = (1 `shiftL` codeSize) - 1
 
 increaseCodeSize :: CodeTable -> CodeTable
-increaseCodeSize codeTable @ CodeTable { ctCodeSize, ctMaxCode, ctClearCode, ctEOI } =
+increaseCodeSize codeTable @ CodeTable { ctCodeSize, ctMaxCode } =
   codeTable { ctCodeSize = ctCodeSize + 1
-            , ctMaxCode = newClearCode - 1
-            , ctClearCode = newClearCode
-            , ctEOI = newClearCode + 1
+            , ctMaxCode = (ctMaxCode `shiftL` 1) + 1
             }
   where
-    newClearCode = ctClearCode `shiftL` 1
 
 getDataSegments :: Canvas -> Get [DataSegment]
 getDataSegments canvas @ Canvas { cvColorTable } = do
@@ -153,7 +153,7 @@ getDataSegments canvas @ Canvas { cvColorTable } = do
          let colorTab = case imgColorTable `orElse` cvColorTable of
                          Just ct -> ct
                          Nothing -> fail "No color table found!"
-             initialCodes = V.fromList $ map (\x -> [fromIntegral x]) [0..(V.length colorTab)-1]
+             initialCodes = V.fromList $ map (\x -> [fromIntegral x]) [0..(V.length colorTab)+1]
              parseEnv = ParseEnv initialCodes (toI minSize)
              codeTab = buildCodeTable parseEnv
          (_, indices) <- execRWST decodeIndexStream parseEnv codeTab
@@ -229,7 +229,7 @@ main = do
      putStrLn $ show segments
   where
     isImage (ImageData _ _) = True
-    isImage _             = False
+    isImage _               = False
     topLeft
       ImageData { imgDatDesc = i1 }
       ImageData { imgDatDesc = i2 } =
