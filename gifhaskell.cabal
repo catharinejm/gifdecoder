@@ -21,6 +21,7 @@ executable gifhaskell
   -- other-extensions:    
   build-depends:       base >=4.8 && <4.9,
                        binary == 0.7.6.*,
+                       binary-bits == 0.5,
                        bytestring == 0.10.6.*,
                        mtl == 2.2.*,
                        vector == 0.11.*
