@@ -81,8 +81,8 @@ dispatchByte 0xF9 = GfxControlLabel
 dispatchByte 0x3B = EndOfGif
 dispatchByte b    = UnknownDispatch b
 
-data ParseEnv = ParseEnv { peBaseCodeTable :: !(V.Vector [Int])
-                         , peMinCodeSize   :: !Int
+data ParseEnv = ParseEnv { peColorTableSize :: !Int
+                         , peMinCodeSize    :: !Int
                          }
                 deriving Show
 

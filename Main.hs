@@ -8,7 +8,7 @@ import qualified Data.ByteString.Lazy as BSL
 import qualified Data.ByteString.Char8 as C
 import qualified Data.ByteString.Lazy.Char8 as CL
 
-import Data.Vector ((!))
+import Data.Vector ((!), (!?))
 import qualified Data.Vector as V
 
 import Control.Monad.RWS.Lazy
@@ -75,13 +75,6 @@ getColorTable n = do
     mkColor bs = let [r,g,b] = BS.unpack bs in
                   Color r g b
 
-groupsOf :: Int -> BS.ByteString -> [BS.ByteString]
-groupsOf n bs = map fst splits
-  where
-    splits :: [(BS.ByteString, BS.ByteString)]
-    splits = tail $ iterate mkSplits (BS.empty, bs)
-    mkSplits (_, rem) = BS.splitAt n rem
-
 
 parseGfxControlExt :: Get GfxControlExt
 parseGfxControlExt = do
@@ -122,19 +115,23 @@ orElse :: Maybe a -> Maybe a -> Maybe a
 orElse Nothing mb = mb
 orElse ma      _  = ma
 
+
 buildCodeTable :: ParseEnv -> CodeTable
-buildCodeTable ParseEnv { peMinCodeSize, peBaseCodeTable } =
-  CodeTable codeSize maxCode (maxCode+1) (maxCode+2) peBaseCodeTable
+buildCodeTable ParseEnv { peMinCodeSize, peColorTableSize } =
+  CodeTable codeSize maxCode clearCode (clearCode+1) initialCodeTable
   where
     codeSize = peMinCodeSize + 1
+    clearCode = 1 `shiftL` peMinCodeSize
     maxCode = (1 `shiftL` codeSize) - 1
+    initialCodeTable = V.fromList $ map (\n -> [n]) [0..peColorTableSize-1]
+
 
 increaseCodeSize :: CodeTable -> CodeTable
-increaseCodeSize codeTable @ CodeTable { ctCodeSize, ctMaxCode } =
+increaseCodeSize codeTable @ CodeTable { ctCodeSize, ctMaxCode, ctCodes } =
   codeTable { ctCodeSize = ctCodeSize + 1
             , ctMaxCode = (ctMaxCode `shiftL` 1) + 1
             }
-  where
+
 
 getDataSegments :: Canvas -> Get [DataSegment]
 getDataSegments canvas @ Canvas { cvColorTable } = do
@@ -153,8 +150,7 @@ getDataSegments canvas @ Canvas { cvColorTable } = do
          let colorTab = case imgColorTable `orElse` cvColorTable of
                          Just ct -> ct
                          Nothing -> fail "No color table found!"
-             initialCodes = V.fromList $ map (\x -> [fromIntegral x]) [0..(V.length colorTab)+1]
-             parseEnv = ParseEnv initialCodes (toI minSize)
+             parseEnv = ParseEnv (V.length colorTab) (toI minSize)
              codeTab = buildCodeTable parseEnv
          (_, indices) <- execRWST decodeIndexStream parseEnv codeTab
          let colors = V.fromList (foldr (\idx acc -> (colorTab ! idx) : acc) [] indices)
@@ -170,26 +166,29 @@ readCodes lastCode = do
    ClearCode -> do env <- ask
                    put (buildCodeTable env)
                    readCodes Nothing
-   MaxCode -> do put $ increaseCodeSize codeTable
-                 getIndices $ toI code
-                 readCodes (Just $ toI code)
    EndOfInputCode -> return ()
-   BasicCode -> getIndices (toI code) >> readCodes (Just $ toI code)
+   _ -> getIndices (toI code) >> readCodes (Just $ toI code)
   where
     getIndices :: Int -> CodeReader ()
     getIndices code = do
       codeTable @ CodeTable { ctCodes } <- get
       case lastCode of
-       Nothing -> tell (ctCodes ! code)
-       Just lc -> if toI code < V.length ctCodes
-                  then do let idxs @ (k:_) = ctCodes ! code
-                              lastIdxs = ctCodes ! lc
-                          tell idxs
-                          put codeTable { ctCodes = V.snoc ctCodes (lastIdxs ++ [k]) }
-                  else do let lastIdxs @ (k:_) = ctCodes ! lc
-                              newIdxs = lastIdxs ++ [k]
-                          tell newIdxs
-                          put codeTable { ctCodes = V.snoc ctCodes newIdxs }
+       Nothing -> let indices = (ctCodes ! code) in tell indices
+       Just lc -> case ctCodes !? code of
+                   Nothing -> do let lastIdxs @ (k:_) = ctCodes ! lc
+                                     newIdxs = lastIdxs ++ [k]
+                                 tell newIdxs
+                                 put $ addCode codeTable newIdxs
+                   Just idxs @ (k:_) -> do let lastIdxs = ctCodes ! lc
+                                           tell idxs
+                                           put $ addCode codeTable (lastIdxs ++ [k])
+
+addCode :: CodeTable -> [Int] -> CodeTable
+addCode codeTable @ CodeTable { ctCodes } indices =
+  case codeMatch codeTable (fromIntegral $ V.length ctCodes) of
+   ClearCode -> codeTable { ctCodes = V.concat [ctCodes, V.fromList [[],[],indices]] }
+   MaxCode -> addCode (increaseCodeSize codeTable) indices
+   _ -> codeTable { ctCodes = V.snoc ctCodes indices }
 
 
 decodeIndexStream :: ImageDataParser ()
@@ -200,15 +199,16 @@ decodeIndexStream = do
     else do env <- ask
             codes <- get
             bytes <- lift $ getByteString (toI dataLen)
-            let (newCodes, indices) = runGet (Bits.runBitGet $ do
-                                                 (_, nc, idxs) <- runRWST (readCodes Nothing) env codes
-                                                 return (nc, idxs))
-                                      (BSL.fromStrict bytes)
+            let (newCodes, indices) =
+                  runGet (Bits.runBitGet $ do
+                             (_, nc, idxs) <- runRWST (readCodes Nothing) env codes
+                             return (nc, idxs))
+                  (BSL.fromStrict bytes)
             put newCodes
             tell indices
             decodeIndexStream
-                  
-  
+
+
 parseGif :: Get (Canvas, [DataSegment])
 parseGif = do
   validateHeader
@@ -216,17 +216,25 @@ parseGif = do
   segments <- getDataSegments canvas
   return (canvas, segments)
 
-  
+
 main :: IO ()
 main = do
   case runGetOrFail parseGif image of
-   Left (bs, off, err) -> do putStrLn err
-                             putStrLn $ show $ map ((printf "0x%02X")::Word8->String) (BSL.unpack bs)
-                             putStrLn $ "Offset: " ++ show off
-   Right (_, _, (canvas, segments)) ->
-     -- let (img : _) = sortBy topLeft (filter isImage segments) in
-     --  putStrLn $ show (imgDatColors img)
-     putStrLn $ show segments
+   Left (bs, off, err) -> do
+     putStrLn err
+     putStrLn $ show $ map ((printf "0x%02X")::Word8->String) (BSL.unpack bs)
+     putStrLn $ "Offset: " ++ show off
+   Right (_, _, (canvas, segments)) -> do
+     let (ImageData { imgDatColors, imgDatDesc } : _) = sortBy topLeft (filter isImage segments)
+     putStrLn $ show imgDatColors
+     let colorCount = length imgDatColors
+         imageArea = (imgWidth imgDatDesc) * (imgHeight imgDatDesc)
+     case compare imageArea colorCount of
+      EQ -> putStrLn "Colors are correct!"
+      GT -> putStrLn $ "Too few colors :( Expected: " ++ show imageArea ++ " Actual: " ++ show colorCount
+      LT -> putStrLn $ "Too many colors! Expected: " ++ show imageArea ++ " Actual: " ++ show colorCount
+
+
   where
     isImage (ImageData _ _) = True
     isImage _               = False
@@ -248,4 +256,5 @@ image = BSL.pack [ 0x47, 0x49, 0x46, 0x38, 0x39, 0x61
                  , 0x87, 0x2A, 0x1C, 0xDC, 0x33, 0xA0
                  , 0x02, 0x75, 0xEC, 0x95, 0xFA, 0xA8
                  , 0xDE, 0x60, 0x8C, 0x04, 0x91, 0x4C
-                 , 0x01, 0x00, 0x3B]
+                 , 0x01, 0x00, 0x3B
+                 ]
