@@ -6,7 +6,6 @@ import Data.Word
 import qualified Data.Vector as V
 import qualified Data.ByteString as BS
 import Data.Binary.Get
-import Data.Binary.Bits.Get
 import Control.Monad.RWS.Lazy
 
 data Canvas = Canvas { cvWidth         :: !Int
@@ -94,5 +93,4 @@ data DataSegment = ImageData { imgDatDesc   :: !ImageDesc
                  | CommentData
                  deriving Show
 
-type CodeReader = RWST ParseEnv [Int] CodeTable BitGet
-type ImageDataParser = RWST ParseEnv [Int] CodeTable Get
+type ImageDataParser = RWST ParseEnv [Int] CodeTable

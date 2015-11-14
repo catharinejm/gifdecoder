@@ -23,6 +23,7 @@ import Data.Char (ord)
 import Text.Printf (printf)
 
 import Types
+import CodeReader
 
 validateHeader :: Get ()
 validateHeader = do
@@ -158,10 +159,10 @@ getDataSegments canvas @ Canvas { cvColorTable } = do
     getSegment (UnknownDispatch b) _ _ = fail $ printf "Unknown dispatch byte: 0x%02X" b
 
 
-readCodes :: Maybe Int -> CodeReader ()
+readCodes :: Maybe Int -> ImageDataParser CodeReader
 readCodes lastCode = do
   codeTable @ CodeTable { ctCodeSize } <- get
-  code <- lift $ Bits.getWord16be ctCodeSize
+  code <- lift $ getCode (toI ctCodeSize)
   case codeMatch codeTable code of
    ClearCode -> do env <- ask
                    put (buildCodeTable env)
@@ -169,7 +170,6 @@ readCodes lastCode = do
    EndOfInputCode -> return ()
    _ -> getIndices (toI code) >> readCodes (Just $ toI code)
   where
-    getIndices :: Int -> CodeReader ()
     getIndices code = do
       codeTable @ CodeTable { ctCodes } <- get
       case lastCode of
@@ -191,7 +191,7 @@ addCode codeTable @ CodeTable { ctCodes } indices =
    _ -> codeTable { ctCodes = V.snoc ctCodes indices }
 
 
-decodeIndexStream :: ImageDataParser ()
+decodeIndexStream :: ImageDataParser Get ()
 decodeIndexStream = do
   dataLen <- lift getWord8
   if dataLen == 0
