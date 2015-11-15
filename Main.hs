@@ -29,12 +29,15 @@ import System.Environment
 import Types
 import CodeReader
 
+gif89a = C.pack "GIF89a"
+gif87a = C.pack "GIF87a"
+
 validateHeader :: Get ()
 validateHeader = do
   header <- getByteString 6
-  if header /= C.pack "GIF89a"
-    then fail "Invalid header. Only GIF 89a supported"
-    else return ()
+  if header == gif89a || header == gif87a
+    then return ()
+    else fail "Invalid header."
 
 
 parseLSD :: Word8 -> LScreenDesc
@@ -108,7 +111,7 @@ parseImageDesc = do
   packed <- getWord8
   let hasColorTab = packed .&. 0x80 /= 0
       isInterlaced = packed .&. 0x40 /= 0
-      colorTabSize = 1 `shift` (fromIntegral $ (packed .&. 0x07))
+      colorTabSize = 1 `shift` (fromIntegral ((packed .&. 0x07) + 1))
       imgDesc = ImageDesc (toI left) (toI top) (toI width) (toI height) isInterlaced
   if hasColorTab
     then do colorTab <- getColorTable colorTabSize
@@ -279,9 +282,9 @@ buildBitmap desc colors = do
       putWord8 colorBlue
       
 
-runParseGif :: FilePath -> IO ()
-runParseGif filename = do
-  image <- BSL.readFile filename
+runParseGif :: FilePath -> FilePath -> IO ()
+runParseGif gif bmp = do
+  image <- BSL.readFile gif
   case runGetOrFail parseGif image of
    Left (bs, off, err) -> do
      putStrLn err
@@ -291,7 +294,7 @@ runParseGif filename = do
      let (imgDat @ ImageData { imgDatColors, imgDatDesc } : _) = sortBy topLeft (filter isImage segments)
      -- putStrLn $ show imgDatColors
      let bitmap = runPut $ buildBitmap imgDatDesc imgDatColors
-     BSL.writeFile "output.bmp" bitmap
+     BSL.writeFile bmp bitmap
      let colorCount = length imgDatColors
          imageArea = (imgWidth imgDatDesc) * (imgHeight imgDatDesc)
      case compare imageArea colorCount of
@@ -310,9 +313,10 @@ runParseGif filename = do
 main :: IO ()
 main = do
   args <- getArgs
-  if null args
-    then error "No filename given"
-    else runParseGif (head args)
+  if length args < 2
+    then error "input and output file names required"
+    else let (inp:out:_) = args
+         in runParseGif inp out
 
 
 image :: BSL.ByteString
