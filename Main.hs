@@ -10,6 +10,7 @@ import qualified Data.ByteString.Lazy.Char8 as CL
 
 import Data.Vector ((!), (!?))
 import qualified Data.Vector as V
+import Data.List (intercalate)
 
 import Control.Monad.RWS.Lazy
 import Control.Monad.State.Lazy
@@ -19,8 +20,11 @@ import Data.List (sortBy)
 import Data.Word
 import Data.Bits
 import Data.Binary.Get
+import Data.Binary.Put
 import Data.Char (ord)
 import Text.Printf (printf)
+import System.IO
+import System.Environment
 
 import Types
 import CodeReader
@@ -235,16 +239,59 @@ parseGif = do
   return (canvas, segments)
 
 
-runParseGif :: IO ()
-runParseGif = do
+printByteString :: BSL.ByteString -> String
+printByteString bs = "[" ++ innerBytes ++ "]"
+  where
+    hexPrint :: Word8 -> String
+    hexPrint = printf "0x%02X"
+    innerBytes = intercalate ", " $ map hexPrint $ BSL.unpack bs
+
+
+buildBitmap :: ImageDesc -> V.Vector Color -> Put
+buildBitmap desc colors = do
+  bitmapHeader
+  colorArray $ V.toList colors
+  where
+    rowByteLen = (truncate ((fromIntegral (24 * (imgWidth desc) + 31)) / 32)) * 4
+    bitmapHeader = do
+      -- BMP header
+      putByteString $ C.pack "BM"
+      putWord32le $ fromIntegral $ 26 + (rowByteLen * (imgHeight desc))
+      putWord16le 0
+      putWord16le 0
+      putWord32le 26
+      -- DIB header
+      putWord32le 12
+      putWord16le $ fromIntegral $ imgWidth desc
+      putWord16le $ fromIntegral $ imgHeight desc
+      putWord16le 1
+      putWord16le 24 -- bpp
+    colorArray [] = return ()
+    colorArray colors = do let (row, rest) = splitAt (imgWidth desc) colors
+                           putRow row
+                           colorArray rest
+    putRow colors = do mapM_ putColor colors
+                       let padSize = rowByteLen - (3 * (length colors))
+                       replicateM_ padSize (putWord8 0)
+    putColor Color { colorRed, colorGreen, colorBlue } = do
+      putWord8 colorRed
+      putWord8 colorGreen
+      putWord8 colorBlue
+      
+
+runParseGif :: FilePath -> IO ()
+runParseGif filename = do
+  image <- BSL.readFile filename
   case runGetOrFail parseGif image of
    Left (bs, off, err) -> do
      putStrLn err
-     putStrLn $ show $ map ((printf "0x%02X")::Word8->String) (BSL.unpack bs)
+     putStrLn $ printByteString bs
      putStrLn $ "Offset: " ++ show off
    Right (_, _, (canvas, segments)) -> do
-     let (ImageData { imgDatColors, imgDatDesc } : _) = sortBy topLeft (filter isImage segments)
-     putStrLn $ show imgDatColors
+     let (imgDat @ ImageData { imgDatColors, imgDatDesc } : _) = sortBy topLeft (filter isImage segments)
+     -- putStrLn $ show imgDatColors
+     let bitmap = runPut $ buildBitmap imgDatDesc imgDatColors
+     BSL.writeFile "output.bmp" bitmap
      let colorCount = length imgDatColors
          imageArea = (imgWidth imgDatDesc) * (imgHeight imgDatDesc)
      case compare imageArea colorCount of
@@ -258,49 +305,14 @@ runParseGif = do
       ImageData { imgDatDesc = i1 }
       ImageData { imgDatDesc = i2 } =
         compare (imgTop i1, imgLeft i1) (imgTop i2, imgLeft i2)
-
-
-runGetCodes :: IO ()
-runGetCodes = do
-  let bitRdr = initBitReader $ fromIntegral $ BSL.length imageData
-      theGet = evalStateT (goGetEm 3 []) bitRdr
-      codes = runGet theGet imageData
-      codeTab = buildCodeTable 2
-      indices = buildIndices codeTab Nothing (tail codes) []
-  putStrLn $ show codes
-  putStrLn $ show indices
-  where
-    goGetEm bitLen codes = do
-      empty <- lift isEmpty
-      BitReader { brBitCnt } <- get
-      if empty && brBitCnt < bitLen
-        then return codes
-        else do code <- readCode bitLen
-                if code == 5 -- EOI
-                  then return (codes ++ [code])
-                  else goGetEm nextLen (codes ++ [code])
-      where
-        nextLen = if (length codes > 0) && (popCount ((length codes) + 5)) == 1
-                  then bitLen + 1
-                  else bitLen
-    buildIndices :: CodeTable -> Maybe Int -> [Word16] -> [Int] -> [Int]
-    buildIndices _ _ [] indices = indices
-    buildIndices codeTable Nothing (c:codes) indices =
-      buildIndices codeTable (Just (toI c)) codes (indices ++ [toI c])
-    buildIndices codeTable (Just lc) (c:codes) indices =
-      case getCode codeTable (toI c) of
-       Nothing -> let Just li @ (k:_) = getCode codeTable lc
-                      ni = li ++ [k]
-                      newCt = addCode codeTable ni
-                  in buildIndices newCt (Just (toI c)) codes (indices ++ ni)
-       Just idxs @ (k:_) -> let Just li = getCode codeTable lc
-                                ni = (li ++ [k])
-                                newCt = addCode codeTable ni
-                            in buildIndices newCt (Just (toI c)) codes (indices ++ idxs)
       
 
 main :: IO ()
-main = runParseGif
+main = do
+  args <- getArgs
+  if null args
+    then error "No filename given"
+    else runParseGif (head args)
 
 
 image :: BSL.ByteString
@@ -317,10 +329,3 @@ image = BSL.pack [ 0x47, 0x49, 0x46, 0x38, 0x39, 0x61
                  , 0xDE, 0x60, 0x8C, 0x04, 0x91, 0x4C
                  , 0x01, 0x00, 0x3B
                  ]
-
-imageData :: BSL.ByteString
-imageData = BSL.pack [ 0x8C, 0x2D, 0x99, 0x87, 0x2A, 0x1C
-                     , 0xDC, 0x33, 0xA0, 0x02, 0x75, 0xEC
-                     , 0x95, 0xFA, 0xA8, 0xDE, 0x60, 0x8C
-                     , 0x04, 0x91, 0x4C, 0x01
-                     ]
