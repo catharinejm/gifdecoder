@@ -27,6 +27,12 @@ readCode n = do
                         , brByte = (brByte br) `shiftR` n
                         }
     consumeByte = do
-      nextBy <- lift $ getWord8
-      modify $ \br -> BitReader nextBy 8 ((brByteCnt br) - 1)
+      BitReader { brByteCnt } <- get
+      if brByteCnt == 0
+        then do dataLen <- lift getWord8
+                if dataLen == 0
+                  then fail "Encountered premature end of image data"
+                  else modify (\br -> br { brByteCnt = fromIntegral dataLen }) >> consumeByte
+        else do nextBy <- lift getWord8
+                put $ BitReader nextBy 8 (brByteCnt - 1)
 
