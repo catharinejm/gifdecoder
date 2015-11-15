@@ -117,12 +117,12 @@ orElse Nothing mb = mb
 orElse ma      _  = ma
 
 
-buildCodeTable :: ParseEnv -> CodeTable
-buildCodeTable ParseEnv { peMinCodeSize, peColorTableSize } =
+buildCodeTable :: Int -> CodeTable
+buildCodeTable minCodeSize =
   CodeTable codeSize maxCode clearCode (clearCode+1) V.empty
   where
-    codeSize = peMinCodeSize + 1
-    clearCode = 1 `shiftL` peMinCodeSize
+    codeSize = minCodeSize + 1
+    clearCode = 1 `shiftL` minCodeSize
     maxCode = (1 `shiftL` codeSize) - 1
 
 
@@ -151,7 +151,7 @@ getDataSegments canvas @ Canvas { cvColorTable } = do
                          Just ct -> ct
                          Nothing -> fail "No color table found!"
              parseEnv = ParseEnv (V.length colorTab) (toI minSize)
-             codeTab = buildCodeTable parseEnv
+             codeTab = buildCodeTable (peMinCodeSize parseEnv)
          indices <- decodeIndexStream parseEnv codeTab
          let colors = V.fromList (foldr (\idx acc -> (colorTab ! idx) : acc) [] indices)
          return ((ImageData imgDesc colors) : segs)
@@ -165,7 +165,7 @@ readCodes = do
   modify $ \ps -> ps { psBitReader = bitState }
   case codeMatch psCodeTable code of
    ClearCode -> do env <- ask
-                   modify $ \ps -> ps { psCodeTable = (buildCodeTable env)
+                   modify $ \ps -> ps { psCodeTable = (buildCodeTable (peMinCodeSize env))
                                       , psLastCode = Nothing
                                       }
    EndOfInputCode -> do ParseState { psBitReader = BitReader { brByteCnt } } <- get
@@ -179,7 +179,7 @@ readCodes = do
     getIndices code = do
       ParseState { psCodeTable = codeTable, psLastCode = lastCode } <- get
       case lastCode of
-       Nothing -> let Just indices = getCode codeTable code in tell [code]
+       Nothing -> let Just indices = getCode codeTable code in tell indices
        Just lc -> case getCode codeTable code of
                    Nothing -> do let Just (lastIdxs @ (k:_)) = getCode codeTable lc
                                      newIdxs = lastIdxs ++ [k]
@@ -244,8 +244,6 @@ runParseGif = do
       EQ -> putStrLn "Colors are correct!"
       GT -> putStrLn $ "Too few colors :( Expected: " ++ show imageArea ++ " Actual: " ++ show colorCount
       LT -> putStrLn $ "Too many colors! Expected: " ++ show imageArea ++ " Actual: " ++ show colorCount
-
-
   where
     isImage (ImageData _ _) = True
     isImage _               = False
@@ -260,7 +258,10 @@ runGetCodes = do
   let bitRdr = initBitReader $ fromIntegral $ BSL.length imageData
       theGet = evalStateT (goGetEm 3 []) bitRdr
       codes = runGet theGet imageData
-  putStrLn $ show $ map fst codes
+      codeTab = buildCodeTable 2
+      indices = buildIndices codeTab Nothing (tail codes) []
+  putStrLn $ show codes
+  putStrLn $ show indices
   where
     goGetEm bitLen codes = do
       empty <- lift isEmpty
@@ -269,12 +270,27 @@ runGetCodes = do
         then return codes
         else do code <- readCode bitLen
                 if code == 5 -- EOI
-                  then return (codes ++ [(code, bitLen)])
-                  else goGetEm nextLen (codes ++ [(code, bitLen)])
+                  then return (codes ++ [code])
+                  else goGetEm nextLen (codes ++ [code])
       where
         nextLen = if (length codes > 0) && (popCount ((length codes) + 5)) == 1
                   then bitLen + 1
                   else bitLen
+    buildIndices :: CodeTable -> Maybe Int -> [Word16] -> [Int] -> [Int]
+    buildIndices _ _ [] indices = indices
+    buildIndices codeTable Nothing (c:codes) indices =
+      buildIndices codeTable (Just (toI c)) codes (indices ++ [toI c])
+    buildIndices codeTable (Just lc) (c:codes) indices =
+      case getCode codeTable (toI c) of
+       Nothing -> let Just li @ (k:_) = getCode codeTable lc
+                      ni = li ++ [k]
+                      newCt = addCode codeTable ni
+                  in buildIndices newCt (Just (toI c)) codes (indices ++ ni)
+       Just idxs @ (k:_) -> let Just li = getCode codeTable lc
+                                ni = (li ++ [k])
+                                newCt = addCode codeTable ni
+                            in buildIndices newCt (Just (toI c)) codes (indices ++ ni)
+      
 
 main :: IO ()
 main = runGetCodes
