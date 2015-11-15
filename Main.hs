@@ -166,31 +166,38 @@ readCodes = do
   case codeMatch psCodeTable code of
    ClearCode -> do env <- ask
                    modify $ \ps -> ps { psCodeTable = (buildCodeTable (peMinCodeSize env))
-                                      , psLastCode = Nothing
+                                      , psCodes = []
                                       }
+                   readCodes
    EndOfInputCode -> do ParseState { psBitReader = BitReader { brByteCnt } } <- get
                         lift $ skip brByteCnt
                         return ()
    _ -> do getIndices (toI code)
-           modify $ \ps -> ps { psLastCode = Just $ toI code }
+           modify $ \ps -> ps { psCodes = ((toI code),(ctCodeSize psCodeTable)) : (psCodes ps) }
            readCodes
   where
     getIndices :: Int -> ImageDataParser ()
     getIndices code = do
-      ParseState { psCodeTable = codeTable, psLastCode = lastCode } <- get
-      case lastCode of
-       Nothing -> let Just indices = getCode codeTable code in tell indices
-       Just lc -> case getCode codeTable code of
-                   Nothing -> do let Just (lastIdxs @ (k:_)) = getCode codeTable lc
-                                     newIdxs = lastIdxs ++ [k]
-                                 tell newIdxs
-                                 modify $ \ps -> ps { psCodeTable = addCode codeTable newIdxs }
-                   Just idxs @ (k:_) -> do let Just lastIdxs = getCode codeTable lc
-                                           tell idxs
-                                           modify $ \ps ->
-                                             ps { psCodeTable =
-                                                     addCode codeTable (lastIdxs ++ [k])
-                                                }
+      ParseState { psCodeTable = codeTable, psCodes = codes } <- get
+      case codes of
+       [] -> let Just indices = getCode codeTable code in tell indices
+       ((lc,_):_) -> case getCode codeTable code of
+                  Nothing -> do lastIdxs @ (k:_) <- getLast codeTable lc
+                                let newIdxs = lastIdxs ++ [k]
+                                tell newIdxs
+                                modify $ \ps -> ps { psCodeTable = addCode codeTable newIdxs }
+                  Just idxs @ (k:_) -> do lastIdxs <- getLast codeTable lc
+                                          tell idxs
+                                          modify $ \ps ->
+                                            ps { psCodeTable =
+                                                    addCode codeTable (lastIdxs ++ [k])
+                                               }
+    getLast :: CodeTable -> Int -> ImageDataParser [Int]
+    getLast codeTable c = case getCode codeTable c of
+                           Nothing -> do ParseState { psCodes } <- get
+                                         fail $ "Could not find " ++ show c ++ " in code table." ++
+                                           "\ncodes: " ++ show (reverse psCodes)
+                           Just is -> return is
       
 
 getCode :: CodeTable -> Int -> Maybe [Int]
@@ -205,7 +212,7 @@ addCode codeTable @ CodeTable { ctCodes, ctEOI } indices =
    MaxCode -> addCode (increaseCodeSize codeTable) indices
    _ -> codeTable { ctCodes = V.snoc ctCodes indices }
   where
-    newCode = fromIntegral $ (fromIntegral ctEOI) + V.length ctCodes
+    newCode = fromIntegral $ (fromIntegral ctEOI) + V.length ctCodes + 1
 
 
 decodeIndexStream :: ParseEnv -> CodeTable -> Get [Int]
@@ -215,7 +222,7 @@ decodeIndexStream parseEnv codeTable = doDecode []
       dataLen <- getWord8
       if dataLen == 0
         then return indices
-        else do let parseState = ParseState codeTable (initBitReader $ toI dataLen) Nothing
+        else do let parseState = ParseState codeTable (initBitReader $ toI dataLen) []
                 (_, newIdxs) <- evalRWST readCodes parseEnv parseState
                 doDecode (indices ++ newIdxs)
 
@@ -289,11 +296,11 @@ runGetCodes = do
        Just idxs @ (k:_) -> let Just li = getCode codeTable lc
                                 ni = (li ++ [k])
                                 newCt = addCode codeTable ni
-                            in buildIndices newCt (Just (toI c)) codes (indices ++ ni)
+                            in buildIndices newCt (Just (toI c)) codes (indices ++ idxs)
       
 
 main :: IO ()
-main = runGetCodes
+main = runParseGif
 
 
 image :: BSL.ByteString

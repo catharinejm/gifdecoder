@@ -104,7 +104,7 @@ initBitReader byteLen = BitReader 0 0 byteLen
 
 data ParseState = ParseState { psCodeTable :: !CodeTable
                              , psBitReader :: !BitReader
-                             , psLastCode  :: !(Maybe Int)
+                             , psCodes  :: ![(Int,Int)]
                              }
 
 type CodeReader = StateT BitReader Get
