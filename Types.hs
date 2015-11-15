@@ -7,6 +7,7 @@ import qualified Data.Vector as V
 import qualified Data.ByteString as BS
 import Data.Binary.Get
 import Control.Monad.RWS.Lazy
+import Control.Monad.State.Lazy
 
 data Canvas = Canvas { cvWidth         :: !Int
                      , cvHeight        :: !Int
@@ -93,4 +94,18 @@ data DataSegment = ImageData { imgDatDesc   :: !ImageDesc
                  | CommentData
                  deriving Show
 
-type ImageDataParser = RWST ParseEnv [Int] CodeTable
+data BitReader = BitReader { brByte    :: !Word8
+                           , brBitCnt  :: !Int
+                           , brByteCnt :: !Int
+                           }
+               deriving (Show)
+initBitReader :: Int -> BitReader
+initBitReader byteLen = BitReader 0 0 byteLen
+
+data ParseState = ParseState { psCodeTable :: !CodeTable
+                             , psBitReader :: !BitReader
+                             , psLastCode  :: !(Maybe Int)
+                             }
+
+type CodeReader = StateT BitReader Get
+type ImageDataParser = RWST ParseEnv [Int] ParseState Get

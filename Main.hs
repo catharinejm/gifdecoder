@@ -12,13 +12,13 @@ import Data.Vector ((!), (!?))
 import qualified Data.Vector as V
 
 import Control.Monad.RWS.Lazy
+import Control.Monad.State.Lazy
 
 import Data.List (sortBy)
 
 import Data.Word
 import Data.Bits
 import Data.Binary.Get
-import qualified Data.Binary.Bits.Get as Bits
 import Data.Char (ord)
 import Text.Printf (printf)
 
@@ -119,12 +119,11 @@ orElse ma      _  = ma
 
 buildCodeTable :: ParseEnv -> CodeTable
 buildCodeTable ParseEnv { peMinCodeSize, peColorTableSize } =
-  CodeTable codeSize maxCode clearCode (clearCode+1) initialCodeTable
+  CodeTable codeSize maxCode clearCode (clearCode+1) V.empty
   where
     codeSize = peMinCodeSize + 1
     clearCode = 1 `shiftL` peMinCodeSize
     maxCode = (1 `shiftL` codeSize) - 1
-    initialCodeTable = V.fromList $ map (\n -> [n]) [0..peColorTableSize-1]
 
 
 increaseCodeSize :: CodeTable -> CodeTable
@@ -153,60 +152,72 @@ getDataSegments canvas @ Canvas { cvColorTable } = do
                          Nothing -> fail "No color table found!"
              parseEnv = ParseEnv (V.length colorTab) (toI minSize)
              codeTab = buildCodeTable parseEnv
-         (_, indices) <- execRWST decodeIndexStream parseEnv codeTab
+         indices <- decodeIndexStream parseEnv codeTab
          let colors = V.fromList (foldr (\idx acc -> (colorTab ! idx) : acc) [] indices)
          return ((ImageData imgDesc colors) : segs)
     getSegment (UnknownDispatch b) _ _ = fail $ printf "Unknown dispatch byte: 0x%02X" b
 
 
-readCodes :: Maybe Int -> ImageDataParser CodeReader
-readCodes lastCode = do
-  codeTable @ CodeTable { ctCodeSize } <- get
-  code <- lift $ getCode (toI ctCodeSize)
-  case codeMatch codeTable code of
+readCodes :: ImageDataParser ()
+readCodes = do
+  ParseState { psCodeTable, psBitReader } <- get
+  (code, bitState) <- lift $ runStateT (readCode $ ctCodeSize psCodeTable) psBitReader
+  modify $ \ps -> ps { psBitReader = bitState }
+  case codeMatch psCodeTable code of
    ClearCode -> do env <- ask
-                   put (buildCodeTable env)
-                   readCodes Nothing
-   EndOfInputCode -> return ()
-   _ -> getIndices (toI code) >> readCodes (Just $ toI code)
+                   modify $ \ps -> ps { psCodeTable = (buildCodeTable env)
+                                      , psLastCode = Nothing
+                                      }
+   EndOfInputCode -> do ParseState { psBitReader = BitReader { brByteCnt } } <- get
+                        lift $ skip brByteCnt
+                        return ()
+   _ -> do getIndices (toI code)
+           modify $ \ps -> ps { psLastCode = Just $ toI code }
+           readCodes
   where
+    getIndices :: Int -> ImageDataParser ()
     getIndices code = do
-      codeTable @ CodeTable { ctCodes } <- get
+      ParseState { psCodeTable = codeTable, psLastCode = lastCode } <- get
       case lastCode of
-       Nothing -> let indices = (ctCodes ! code) in tell indices
-       Just lc -> case ctCodes !? code of
-                   Nothing -> do let lastIdxs @ (k:_) = ctCodes ! lc
+       Nothing -> let Just indices = getCode codeTable code in tell [code]
+       Just lc -> case getCode codeTable code of
+                   Nothing -> do let Just (lastIdxs @ (k:_)) = getCode codeTable lc
                                      newIdxs = lastIdxs ++ [k]
                                  tell newIdxs
-                                 put $ addCode codeTable newIdxs
-                   Just idxs @ (k:_) -> do let lastIdxs = ctCodes ! lc
+                                 modify $ \ps -> ps { psCodeTable = addCode codeTable newIdxs }
+                   Just idxs @ (k:_) -> do let Just lastIdxs = getCode codeTable lc
                                            tell idxs
-                                           put $ addCode codeTable (lastIdxs ++ [k])
+                                           modify $ \ps ->
+                                             ps { psCodeTable =
+                                                     addCode codeTable (lastIdxs ++ [k])
+                                                }
+      
+
+getCode :: CodeTable -> Int -> Maybe [Int]
+getCode codeTable n =
+  if n <= fromIntegral (ctEOI codeTable)
+  then Just [n]
+  else (ctCodes codeTable) !? (n - (fromIntegral (ctEOI codeTable)) - 1)
 
 addCode :: CodeTable -> [Int] -> CodeTable
-addCode codeTable @ CodeTable { ctCodes } indices =
-  case codeMatch codeTable (fromIntegral $ V.length ctCodes) of
-   ClearCode -> codeTable { ctCodes = V.concat [ctCodes, V.fromList [[],[],indices]] }
+addCode codeTable @ CodeTable { ctCodes, ctEOI } indices =
+  case codeMatch codeTable newCode of
    MaxCode -> addCode (increaseCodeSize codeTable) indices
    _ -> codeTable { ctCodes = V.snoc ctCodes indices }
+  where
+    newCode = fromIntegral $ (fromIntegral ctEOI) + V.length ctCodes
 
 
-decodeIndexStream :: ImageDataParser Get ()
-decodeIndexStream = do
-  dataLen <- lift getWord8
-  if dataLen == 0
-    then return ()
-    else do env <- ask
-            codes <- get
-            bytes <- lift $ getByteString (toI dataLen)
-            let (newCodes, indices) =
-                  runGet (Bits.runBitGet $ do
-                             (_, nc, idxs) <- runRWST (readCodes Nothing) env codes
-                             return (nc, idxs))
-                  (BSL.fromStrict bytes)
-            put newCodes
-            tell indices
-            decodeIndexStream
+decodeIndexStream :: ParseEnv -> CodeTable -> Get [Int]
+decodeIndexStream parseEnv codeTable = doDecode []
+  where
+    doDecode indices = do
+      dataLen <- getWord8
+      if dataLen == 0
+        then return indices
+        else do let parseState = ParseState codeTable (initBitReader $ toI dataLen) Nothing
+                (_, newIdxs) <- evalRWST readCodes parseEnv parseState
+                doDecode (indices ++ newIdxs)
 
 
 parseGif :: Get (Canvas, [DataSegment])
@@ -217,8 +228,8 @@ parseGif = do
   return (canvas, segments)
 
 
-main :: IO ()
-main = do
+runParseGif :: IO ()
+runParseGif = do
   case runGetOrFail parseGif image of
    Left (bs, off, err) -> do
      putStrLn err
@@ -244,6 +255,31 @@ main = do
         compare (imgTop i1, imgLeft i1) (imgTop i2, imgLeft i2)
 
 
+runGetCodes :: IO ()
+runGetCodes = do
+  let bitRdr = initBitReader $ fromIntegral $ BSL.length imageData
+      theGet = evalStateT (goGetEm 3 []) bitRdr
+      codes = runGet theGet imageData
+  putStrLn $ show $ map fst codes
+  where
+    goGetEm bitLen codes = do
+      empty <- lift isEmpty
+      BitReader { brBitCnt } <- get
+      if empty && brBitCnt < bitLen
+        then return codes
+        else do code <- readCode bitLen
+                if code == 5 -- EOI
+                  then return (codes ++ [(code, bitLen)])
+                  else goGetEm nextLen (codes ++ [(code, bitLen)])
+      where
+        nextLen = if (length codes > 0) && (popCount ((length codes) + 5)) == 1
+                  then bitLen + 1
+                  else bitLen
+
+main :: IO ()
+main = runGetCodes
+
+
 image :: BSL.ByteString
 image = BSL.pack [ 0x47, 0x49, 0x46, 0x38, 0x39, 0x61
                  , 0x0A, 0x00, 0x0A, 0x00, 0x91, 0x00
@@ -258,3 +294,10 @@ image = BSL.pack [ 0x47, 0x49, 0x46, 0x38, 0x39, 0x61
                  , 0xDE, 0x60, 0x8C, 0x04, 0x91, 0x4C
                  , 0x01, 0x00, 0x3B
                  ]
+
+imageData :: BSL.ByteString
+imageData = BSL.pack [ 0x8C, 0x2D, 0x99, 0x87, 0x2A, 0x1C
+                     , 0xDC, 0x33, 0xA0, 0x02, 0x75, 0xEC
+                     , 0x95, 0xFA, 0xA8, 0xDE, 0x60, 0x8C
+                     , 0x04, 0x91, 0x4C, 0x01
+                     ]
